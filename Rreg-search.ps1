@@ -30,30 +30,23 @@
 #
 #
 $FindReplaceTable = @( 
-    ("\\ChurchServer\bookkeeping\",            "\\theServer\bookkeeping\"),
-    ("\\Churchserver\general\",                "\\theServer\general\"),
-    ("\\Churchserver\executive\",              "\\theServer\executive\"),
-    ("//churchserver.sccc.local/users/",       "//theServer/users/"),
-    ("\\churchserver.sccc.local\users\",       "\\theServer\users\"),
-    ("\\churchserver\users\",                  "\\theServer\users\"),
-#    ("\\CHURCHSERVER\Folder Redirection\lynn\", "c:\users\lynn\"),
-##    ("//CHURCHSERVER/Folder%20Redirection/lynn/", "c:/users/lynn/",
-#    ("//CHURCHSERVER/Folder%20Redirection/lynn/", "c:/users/lynn/",
+    ("\\oldServer\bookkeeping\",            "\\theServer\bookkeeping\"),
+    ("\\oldserver\general\",                "\\theServer\general\"),
+    ("\\oldserver\executive\",              "\\theServer\executive\"),
+    ("//olderver.sccc.local/users/",       "//theServer/users/"),
+    ("\\oldserver.sccc.local\users\",       "\\theServer\users\"),
+    ("\\oldserver\users\",                  "\\theServer\users\"),
+#    ("\\OLDSERVER\Folder Redirection\jim\", "c:\users\jim\"),
+#    ("//OLDSERVER/Folder%20Redirection/JIM/", "c:/users/jim/",
     ("\\Churchserver\children\",               "\\theServer\children\"),
-    ("/ChurchServer/bookkeeping/",             "/theServer/bookkeeping/"), 
-    ("/Churchserver/general/",                 "/theServer/general/"),
-    ("/Churchserver/executive/",               "/theServer/executive/"),
-    ("/Churchserver/children/",                "/theServer/children/")
+    ("/oldServer/bookkeeping/",             "/theServer/bookkeeping/"), 
+    ("/oldserver/general/",                 "/theServer/general/"),
+    ("/oldserver/executive/",               "/theServer/executive/"),
+    ("/oldserver/children/",                "/theServer/children/")
     )
         
     
 
-#    ("\Users\darrE",                           "\users\DARRR!"), 
-#    ("C/Users/daRRe",                          "C/Users/DARR?"),
-#   ("ChurchServer",                          "ChurchServer"),
-
-
-# $top = "REGISTRY::HKEY_USERS\D\Software\"
 $top = "hkcu:\Software\"
 
 
