@@ -1,7 +1,7 @@
 # Win10SupportScripts
 Misc Scripts use on Windows 10 computers to do some PC Pro support tasks
 
-__Rreg-search.ps1__
+## __Rreg-search.ps1__
 
 Simplicity support for Verbose and Debug options
 
@@ -24,8 +24,12 @@ There are options for snapshotting the registry
 
 The second component of this script clears of OST keys in the profile so it will recreate the file in a different location (within Appdata) especially if it was embbedded into a folder redirection path to a server ... \\ in the path
 
-__office_vpn.ps1__  Create a VPN Connection on Windows 10 and installed a self sign certifcate to make it work.  That required administrator.  So it will run as administrator if it can to make sure the cert is installed.  
-It does not have checking to see if the cert is already installed.  It is not generalized so it can be easily modified... TODO
+## __office_vpn.ps1__  
+Create a VPN Connection on Windows 10 and installed a self sign certifcate to make it work.  That required administrator.  So it will run as administrator if it can to make sure the cert is installed.  Is is specifically configured to use a PFSense Firewall VPN connection (IKE with split tunnel).  https://docs.netgate.com/pfsense/en/latest/vpn/ipsec/configuring-an-ipsec-remote-access-mobile-vpn-using-ikev2-with-eap-mschapv2.html 
+
+- [ ] It does not have checking to see if the cert is already installed.  
+- [ ] It is not generalized so it can be easily modified.
+- [ ] Should make it VpnConnectionTriggerApplication for dynamic connection
 
 
 
