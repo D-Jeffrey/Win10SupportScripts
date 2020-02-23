@@ -34,13 +34,15 @@ Create a VPN Connection on Windows 10 and installed a self sign certifcate to ma
 ## __post-update-run.ps1__
 I'm old school with a new gen approach. I have SSD as my C drive and I have traditional spin hard drives as my Downloads and Public Drive partitions (I keep tons of pictures & videos there).  This script is used during boot running within Task Scheduler (run As Startup), so that it can fixup and remount my external drives.  A lot of people don't know about mount points, and Microsoft doesn't talk about them.  (See Junctions below).  Because I'm messing with the restricted security directory of Public, it needs to run before Explorer or other processes that created locks on the \users\Public directory structure, which is why it needs to run as part of at Startup.
 
-`junction64.exe c:\Users\Public
+`junction64.exe c:\Users\Public`
 
-Junction v1.07 - Creates and lists directory links
-Copyright (C) 2005-2016 Mark Russinovich
-Sysinternals - www.sysinternals.com
+`Junction v1.07 - Creates and lists directory links`
+`Copyright (C) 2005-2016 Mark Russinovich`
+`Sysinternals - www.sysinternals.com`
 
-c:\Users\Public: MOUNT POINT
-   Print Name     : \??\Volume{2f5b6ca6-50d6-4fbd-a874-82dd838461a3}\
-   Substitute Name: Volume{2f5b6ca6-50d6-4fbd-a874-82dd838461a3}\`
+`c:\Users\Public: MOUNT POINT`
+   `Print Name     : \??\Volume{2f5b6ca6-50d6-4fbd-a874-82dd838461a3}\`
+   `Substitute Name: Volume{2f5b6ca6-50d6-4fbd-a874-82dd838461a3}\`
 
+### precommit.cmd
+Using https://docs.microsoft.com/en-us/windows-hardware/manufacture/desktop/windows-setup-enable-custom-actions precommit custom actions, I disount the drives using a old school cmd which inputs to diskpart
