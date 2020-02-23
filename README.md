@@ -46,4 +46,4 @@ I'm old school with a new gen approach. I have SSD as my C drive and I have trad
 
 
 ### precommit.cmd
-Using https://docs.microsoft.com/en-us/windows-hardware/manufacture/desktop/windows-setup-enable-custom-actions precommit custom actions, I dismount the drives using a old school cmd which inputs to diskpart
+Using https://docs.microsoft.com/en-us/windows-hardware/manufacture/desktop/windows-setup-enable-custom-actions#custom-action-script-locations-and-examples precommit custom actions, I dismount the drives using a old school cmd which inputs to diskpart
