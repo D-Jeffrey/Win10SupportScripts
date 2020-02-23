@@ -45,4 +45,4 @@ I'm old school with a new gen approach. I have SSD as my C drive and I have trad
    `Substitute Name: Volume{2f5b6ca6-50d6-4fbd-a874-82dd838461a3}\`
 
 ### precommit.cmd
-Using https://docs.microsoft.com/en-us/windows-hardware/manufacture/desktop/windows-setup-enable-custom-actions precommit custom actions, I disount the drives using a old school cmd which inputs to diskpart
+Using https://docs.microsoft.com/en-us/windows-hardware/manufacture/desktop/windows-setup-enable-custom-actions precommit custom actions, I dismount the drives using a old school cmd which inputs to diskpart
