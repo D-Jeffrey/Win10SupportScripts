@@ -47,3 +47,7 @@ I'm old school with a new gen approach. I have SSD as my C drive and I have trad
 
 ### precommit.cmd
 This works as part of above.  Using https://docs.microsoft.com/en-us/windows-hardware/manufacture/desktop/windows-setup-enable-custom-actions#custom-action-script-locations-and-examples precommit custom actions, I dismount the drives using a old school cmd which inputs to diskpart
+
+## __AdjustPrivilege.ps1__
+This is from Ondřej Ševeček (https://www.sevecek.com/EnglishPages/default.aspx)
+Backup privilege (SeBackupPrivilege),can be enabled for a process or thread it automatically gives the generic read permission to any resource operation.  I will use it for PST scan scripts without requiring a change in user permissions to directories.
