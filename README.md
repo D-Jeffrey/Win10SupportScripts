@@ -32,6 +32,7 @@ Create a VPN Connection on Windows 10 and installed a self sign certifcate to ma
 - [ ] Should make it VpnConnectionTriggerApplication for dynamic connection
 
 ## __post-update-run.ps1__
+// this currently not working.  trying to run from the Task Scheduler as System now...
 I'm old school with a new gen approach. I have SSD as my C drive and I have traditional spin hard drives as my Downloads and Public Drive partitions (I keep tons of pictures & videos there).  This script is used during boot running within Task Scheduler (run As Startup), so that it can fixup and remount my external drives.  A lot of people don't know about mount points, and Microsoft doesn't talk about them.  (See Junctions below).  Because I'm messing with the restricted security directory of Public, it needs to run before Explorer or other processes that created locks on the \users\Public directory structure, which is why it needs to run as part of at Startup.
 
 >junction64.exe c:\Users\Public
