@@ -52,3 +52,10 @@ This works as part of above.  Using https://docs.microsoft.com/en-us/windows-har
 ## __AdjustPrivilege.ps1__
 This is from Ondřej Ševeček (https://www.sevecek.com/EnglishPages/default.aspx)
 Backup privilege (SeBackupPrivilege),can be enabled for a process or thread it automatically gives the generic read permission to any resource operation.  I will use it for PST scan scripts without requiring a change in user permissions to directories.
+
+
+## ConnectO365Services.ps1
+Connect to O365 Services with MFA support
+Source https://o365reports.com/2019/10/05/connect-all-office-365-services-powershell/?src=github
+
+
