@@ -59,3 +59,15 @@ Connect to O365 Services with MFA support
 Source https://o365reports.com/2019/10/05/connect-all-office-365-services-powershell/?src=github
 
 
+## CheckUser365.ps1
+This is a complex script which has grown over time.  It was started by Robert Luck 
+- https://gallery.technet.microsoft.com/scriptcenter/Export-Office-365-Users-81747c73
+- https://o365reports.com/2019/05/09/export-office-365-users-mfa-status-csv/
+- https://github.com/michelvoillery/The-Code-Repository/blob/5d7b64aa4eed433dfa506e7d4289afa823b54ff9/Scripts/Export%20Office%20365%20Users%20MFA%20Status.md
+And I have added a lot into... it is a WIP.
+- Queries MSOL for users and builds a CSV with the following attributes:
+DisplayName, UserPrincipalName, MFAStatus, AllMFAMethods, MFAPhone, MFAEmail, MSOL LicenseStatus, 
+Azure SignInStatus, Skype SIPLocation, TeamsState, TeamsFederated,  TeamsVoice, Exchange Online Status, Group membership for Licensing, PrimarySMTP,
+IsAdmin, AdminRoles, ExtraLicense, Title, Manager, Type, Source, EmployeeNumber, CreateType, PhoneNumber
+- List of Teams And the admins of those teams with attributes of 
+DisplayName, ManagedByDetails, Notes, GroupMemberCount, GroupExternalMemberCount, AllowAddGuests, ExpirationTime, WhenCreated 
