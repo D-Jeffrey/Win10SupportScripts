@@ -1,6 +1,29 @@
 # Win10SupportScripts
 Misc Scripts use on Windows 10 computers to do some PC Pro support tasks
 
+
+
+## __PSTMoveFromOneDrive.ps1__
+ Designed to move PST files outside of OneDrive directory space at logon time.
+ 
+ Put it in a directory. Open powershell.  And just run the script… no parameters works… 
+
+If you want to see everything, but don’t do anything use these parameters
+ `   .\PST-fixup.ps1 -Verbose -WhatIf -Debug` 
+
+There is a 20 second pause at the end and it runs minimized for early testing (it could run hidden, not sure if that would make it start faster)
+
+You can use 
+`   .\PST-fixup.ps1  -install`
+To hook it in to run after right after logon.  (if you don’t have Outlook autostarting, then it will work, otherwise you might see errors for “in use”)
+`   .\PST-fixup.ps1  -remove`
+To unhook it
+The idea wasto push the file onto your computers and this will hook for all users and run for anyone..   if it run hidden, then it would not be noticed by people, but we should unhook it after a while.
+
+There where some times when it could move the files from under Outlook but it would appear buggy to the users, so it will check to see if Outlook is running and skip messing with the Open/mounted PST files.
+
+Bug??: there maybe a issue with the way files are detected as 'inside' OneDrive space
+ 
 ## __Rreg-search.ps1__
 
 Simplicity support for Verbose and Debug options
