@@ -1,6 +1,5 @@
-# Win10SupportScripts
-Misc Scripts use on Windows 10 computers to do some PC Pro support tasks
-
+# Win10 and Office 365 Support Scripts
+Misc Scripts use on Windows 10 computersand others for Office 365 to do some PC Pro support tasks
 
 
 ## __PSTMoveFromOneDrive.ps1__
@@ -22,7 +21,7 @@ The idea wasto push the file onto your computers and this will hook for all user
 
 There where some times when it could move the files from under Outlook but it would appear buggy to the users, so it will check to see if Outlook is running and skip messing with the Open/mounted PST files.
 
-Bug??: there maybe a issue with the way files are detected as 'inside' OneDrive space
+There maybe a issue with the way files are detected as 'inside' OneDrive space
  
 ## __Rreg-search.ps1__
 
