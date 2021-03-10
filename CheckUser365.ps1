@@ -1,13 +1,9 @@
-#--------------------------------------------------------------------------------
-#  CheckUser365.ps1
-#
-# DISCLAIMER - Trial and error built... it may work/stop working  in a few months based on what MS does in Azure
 #
 # All the interesting things you want to know about users and guest while you are migrating to Office 365.
 #
 # This was create through many iterations and trial/error.  I'm sure there is a cleaner way of bring this information together,
 # but it evolved over time.  For the AzureAD queries has components of MSOL and EXO within it.  I'm sure there is a better way to do this.
-# The Cache is used since 
+# 
 #  -Summary            will give a summary of Licenses, Groups Mailboxes (if IncludeExchange is used)
 #  -IncludeExchange    Pull mailbox information
 #  -CheckFor           Allow to search for a user or part of a user  ..  -CheckFor Darren
@@ -16,21 +12,46 @@
 #  -ShowAllColumns     Pull everything... all columns
 #                      If none of the filters are applied it will pull all the objects
 #  -IncludeTeams       give information about TeamsUpgradePolicy and ExternalAccessPolicy, but it is a very slow process
-#  
 #
+#  -EnabledOnly
+#  -DisabledOnly
+#  -AdminOnly
+#  -LicensedUserOnly
+#  -ConditionalAccessOnly 
+#
+# if you use the ___Only parameters the results may be not complete.
 # Caching - it takes time to query MS, so in order to acccelrate that, caching was added for Roles, Exo, Groups, AD Users
 #       AAD Users, this can reduces the look time for a query from 20 seconds down to 4 seconds.
 #       The cache TTL is 24 hours,  It caches, groups, AD Users, Exo state, and Roles.
 #       The 'Live data' is the MSOL/AAD state of users
+# For us, we used groups to apply licenses which is why we want those.
+#
+# There is a still a need to adjust Fix the 2nd logon for Teams
+# and add more error checking.  Disabling Caching is not well tested.
+# I'm sure if I re-wrote some of this in Graph it would be faster (especially the Teams queries)
+#
+#   Look for CONFIGURATIONHERE for please you may need to adjus for your configuration.
 #
 # Orginal sources Robert Luck 
 #     https://gallery.technet.microsoft.com/scriptcenter/Export-Office-365-Users-81747c73
-#     https://o365reports.com/2019/05/09/export-office-365-users-mfa-status-csv/
-# Other github reference 
-#     https://github.com/michelvoillery/The-Code-Repository/blob/5d7b64aa4eed433dfa506e7d4289afa823b54ff9/Scripts/Export%20Office%20365%20Users%20MFA%20Status.md
+#     https://o365reports.com/2019/05/09/export-office-365-users-mfa-status-csv/ 
 # 
-# For us we used groups to apply licenses which is why we want those.
-# 
+#
+# This script uses the following Modules:
+#    ActiveDirectory
+#    MSOnline
+#    MicrosoftTeams
+#    ExchangeOnlineManagement
+#    AzureAD
+#    SMAAuthoringToolkit
+#    
+#    It does not yet use the new Teams Module released in Mar 2021
+#
+# Recommend command-line:
+#         & '.\CheckUser365.ps1' -IncludeSummary -IncludeExchange -ShowMFA -ShowAllColumns -IncludeTeams
+# or to look up a person
+#         & '.\CheckUser365.ps1' -IncludeExchange -ShowMFA -ShowAllColumns -CheckFor Darren
+#
 #--------------------------------------------------------------------------------
 
 
@@ -38,6 +59,7 @@ param
 (
   [Parameter(Mandatory = $false)]
   [switch]$Summary,                    # Summary of objects & Licenses
+  [switch]$IncludeSummary,             # Do the Summary after the extract
   [switch]$IncludeExchange,            # QUery Exchange for Mailbox state
   [string]$CheckFor = "",              # Part search string for user
   [switch]$DisabledOnly,
@@ -54,11 +76,14 @@ param
   [string]$UserName,
   [string]$Password,
   [switch]$IncludeTeams,
+  [switch]$IncludeGroups,              # Include Office 365 Groups
   [switch]$FlushCache,                # to clear all the program generated caches 
   [int32]$TopX = -1,
   [switch]$TeamCount
 )
 
+# Extra Licenses to look for  
+# CONFIGURATIONHERE
 
 $selectSkus = @(
   [pscustomobject]@{ Code = "MCOMEETADV"; Name = "Microsoft365AudioConferencing" }
@@ -78,15 +103,22 @@ $selectSkus = @(
   
 )
 
+# If you want to call out membership in special groups
+# CONFIGURATIONHERE
 
-$scriptversion = "v.20.10.4"
+$ShowSpecialGroups = @( "App_IPP_Users", "NoPSTGrowth", "FAB-GuestUsers" )
+  
+
+
+$scriptversion = "v.21.03.126"
 $runtime = Get-Date
+
 
 
 #$sku = "*:ENTERPRISEPACK"
 $sku = "*"
+# The group users for License assignment CONFIGURATIONHERE
 $E5GName = "Azure_License_MBaseE5"
-$CRMGName = "CRM 2015 Users Test"
 
 #Caching files to speed up startup run of script
 $UseCaching = 1
@@ -94,14 +126,18 @@ $CacheAge = -1    # one day Cache
 $EXOCache = $env:TEMP  + "\CheckUser365.Exo.Cache"
 $GrpCache1 = $env:TEMP  + "\CheckUser365.grp1.Cache"
 $GrpCache2 = $env:TEMP  + "\CheckUser365.grp2.Cache"
+$OGrpCache = $env:TEMP  + "\CheckUser365.ogrp.Cache"
 $UsrCache = $env:TEMP  + "\CheckUser365.usr.Cache"
 $AADCache = $env:TEMP  + "\CheckUser365.AAD.Cache"
 $RolCache = $env:TEMP  + "\CheckUser365.Rol.Cache"
 
+$AllMailboxtypes = {"DynamicDistributionGroup", "MailContact", "MailNonUniversalGroup", "MailUniversalDistributionGroup",
+        "MailUniversalSecurityGroup", "MailUser", "PublicFolder", "UserMailbox"}
 
 #Output file declaration 
-$ExportCSV = ".\MFADisabledUserReport_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` tt).ToString()).csv"
-$ExportCSVReport = ".\MFAEnabledUserReport_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` tt).ToString()).csv"
+$ExportCSV = ".\DisabledUserReport_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` tt).ToString()).csv"
+$ExportCSVReport = ".\EnabledUserReport_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` tt).ToString()).csv"
+$ExportCSVTeams = ".\Teams_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` tt).ToString()).csv"
 
 function Get-CurrentLine {
   -join ("Line: ",$Myinvocation.ScriptlineNumber)
@@ -109,23 +145,181 @@ function Get-CurrentLine {
 
 function UseCache {
 param (
-        [string[]]$CacheFile
+        [string[]]$CacheFile,
+        [boolean[]]$isSeemStatic
     )
+    if ($isSeemStatic) {
+        $age = $CacheAge*10
+    } else {
+        $age = $CacheAge
     
+    }
     Return  ($UseCaching -and  ((Get-Item -LiteralPath $CacheFile -ErrorAction SilentlyContinue).LastWriteTime -gt (Get-Date).AddDays($CacheAge)))
     
     
  }
+Function WriteError
+{
+    param 
+    (
+        [Parameter(Mandatory=$true,Position=0)]
+        [string]$Message
+    )
+    if ($AAMode) {
+       Write-Output ((get-date -Format "dd-MMM-yyyy hh:mm:ss tt") + ": ERROR: $Message")
+    } else {
+       Write-Host (get-date -Format "dd-MMM-yyyy hh:mm:ss tt") ": ERROR: $Message" -ForegroundColor RED
+       }
+}
+
+Function Get-RecursiveAzureAdGroupMemberUsers{
+[cmdletbinding()]
+param(
+   [parameter(Mandatory=$True,ValueFromPipeline=$true)]
+   $AzureGroup
+)
+    Begin{
+        If(-not(Get-AzureADCurrentSessionInfo)){Connect-AzureAD}
+    }
+    Process {
+        Write-Verbose -Message "Enumerating $($AzureGroup.DisplayName)"
+        $Members = Get-AzureADGroupMember -ObjectId $AzureGroup.ObjectId -All $true
+        $UserMembers = $Members | Where-Object{$_.ObjectType -eq 'User'}
+        If($Members | Where-Object{$_.ObjectType -eq 'Group'}){
+            $UserMembers += $Members | Where-Object{$_.ObjectType -eq 'Group'} | ForEach-Object{ Get-RecursiveAzureAdGroupMemberUsers -AzureGroup $_}
+        }
+    }
+    end {
+        Return $UserMembers
+    }
+}
+Function WriteInfo
+{
+    param 
+    (
+        [Parameter(Mandatory=$true,Position=0)]
+        [string]$Message
+    )
+    if ($AAMode) {
+       Write-Output ((get-date -Format "dd-MMM-yyyy hh:mm:ss tt") + ": INFO: $Message")
+    } else {
+        Write-Host (get-date -Format "dd-MMM-yyyy hh:mm:ss tt") ": INFO: $Message" -ForegroundColor Yellow
+        }
+}
 
 
 
 
+$EmpoyeeCount = 0
+$ContractCount = 0
+$EmpoyeeCountLeft = 0
+$ContractCountLeft = 0
+
+# --------------------------------------------------------------------------------------------------------------
+# Function doSummary
+#
+#--------------------------------------------------------------------------------------------------------------
+
+function doSummary {
+
+  Write-Host "----------     Summary       -----------" -BackgroundColor DarkYellow
+  # Look for Teams and O365 Groups
+  if ($IncludeExchange.IsPresent) {
+    $UGroups = (Get-UnifiedGroup -Filter 'ResourceProvisioningOptions -ne $null' )
+    }
+
+  Write-Output ("Total users/groups/mailboxes/accounts in Azure " + $who.count)
+
+  if ($IncludeExchange.IsPresent) {
+    Write-Output ("Mailboxes")
+    $EXOList.StorageGroupName | Select-Object -Unique | ForEach-Object { 
+        $R = $_
+        if ($R -like "-") { $R = "Account Only" }
+        Write-Output ("  " + $R.PadRight(20) + ": " + ($EXOList | Where-Object StorageGroupName -eq $r ).count )
+        if (($R -like "On-Premise") -and $Summary.IsPresent) {
+            Write-Output ("   - This will miss count on-premise mailboxes as some could be only accounts w/o mailboxes - run without '-Summary'")
+            }
+        }
+
+
+  }
+  if ($EmpoyeeCount -ne 0) {
+   $line = ""
+    if ($IncludeExchange.IsPresent) {
+        $line = ", Exchange-online" 
+        }
+    Write-Output "People Accounts Activated$line & Licensed"
+    Write-Output ("  Total          " + ($EmpoyeeCount + $ContractCount)) 
+    Write-Output "    Employees    $EmpoyeeCount"
+    Write-Output "    Contractor   $ContractCount"
+    if ($IncludeExchange.IsPresent) {
+    Write-Output "Still On-Premise (Employee number based)"
+    Write-Output "    Employees    $EmpoyeeCountLeft"
+    Write-Output "    Contractor   $ContractCountLeft"
+    }
+  
+  }
+  
+
+  # we have to look this one up because it is not cached
+  Write-Output ("Users in Azure License E5     " + $E5GroupList.count + " vs " + (Get-ADGroup "Azure_License_NonMBaseE5" | Get-ADGroupMember).count  + " Nonbase E5")
+
+  # Pull information about Office 365 Groups
+  if ($IncludeExchange.IsPresent) {
+  
+    Write-Output ("Teams Sites/Groups            " + $UGroups.count)
+    Write-Output ("    - no users   : "  + ($UGroups | Where-Object GroupMemberCount -eq 0).count)
+    Write-Output ("    - 1 user     : "  + ($UGroups | Where-Object GroupMemberCount -eq 1).count)
+    Write-Output ("    - with guests: "  + ($UGroups | Where-Object GroupExternalMemberCount -ne 0).count)
+    $UGroups | select DisplayName, ManagedByDetails, Notes, GroupMemberCount, GroupExternalMemberCount,  AllowAddGuests, ExpirationTime, WhenCreated, SensitivityLabel, ResourceProvisioningOptions     | Export-Csv -Notype -Path $ExportCSVTeams 
+    
+    }
+  write-Output ("Disabled Users with a License " + (Get-MsolUser -EnabledFilter DisabledOnly -All | Where-Object  isLicensed -EQ true  | Where-Object  {$_.Licenses.AccountSkuId -contains ":SPE_E5"}).count) 
+  
+  }
+
+
+
+
+#  ==========================================================================
+# reset connections
+#
+  if ($FlushCache.IsPresent) {
+        Disconnect-AzureAD  -ErrorAction SilentlyContinue
+        Disconnect-ExchangeOnline -ErrorAction SilentlyContinue
+        Disconnect-MicrosoftTeams -ErrorAction SilentlyContinue
+        Get-PSSession | Remove-PSSession
+
+  }
+
+
+ #ERICH
+ $Modules = Get-Module -Name SMAAuthoringToolkit -ListAvailable  #needed for Get-AutomationVariable 
+if ($Modules.count -eq 0)
+{
+  WriteError Please install SMAAuthoringToolkit module using below command: `nInstall-Module SMAAuthoringToolkit
+  exit
+}
+ 
+$ClientID = Get-AutomationVariable -Name 'ClientID' -WarningAction SilentlyContinue
+
+if ($ClientID -eq $null) {
+    $AAMode = $false
+    $username = (get-aduser $env:username -Properties UserPrincipalName).UserPrincipalName
+    } else {
+# Azure Automate Mode
+    $AAMode = $true
+# Turn off Caching for Automate
+    if ($UseCaching) {
+        $UseCaching = $false
+        }
+}
 
 #Check for MSOnline module 
 $Modules = Get-Module -Name MSOnline -ListAvailable
 if ($Modules.count -eq 0)
 {
-  Write-Host Please install MSOnline module using below command: `nInstall-Module MSOnline -ForegroundColor yellow
+  WriteError "Please install MSOnline module using below command: `nInstall-Module MSOnline"
   exit
 }
 
@@ -136,17 +330,26 @@ if (($UserName -ne "") -and ($Password -ne ""))
 {
   $SecuredPassword = ConvertTo-SecureString -AsPlainText $Password -Force
   $Credential = New-Object System.Management.Automation.PSCredential $UserName,$SecuredPassword
-  Connect-MsolService -Credential $credential
+  WriteInfo "Connect Direct MSOL"    
+  Connect-MsolService -accountid $credential
 }
 else
 {
-
+  if ($AAMode) {
+   $credObject = Get-AutomationPSCredential -Name "Office-Credentials" 
+   Connect-MsolService -Credential $credObject
+   Connect-MsolService  -AzureEnvironment "AzureCloud"
+   }
+   else {
   try {
+    WriteInfo "Testing Domain for MSOL"    
     Get-MsolDomain -ErrorAction Stop | Out-Null
   } catch {
+    WriteInfo "Connecting to MSOL"
     Write-Progress -Activity ("CheckUser365 - " + $scriptversion + "`n... Connecting ... `n")
     Connect-MsolService | Out-Null
 
+  }
   }
 
 }
@@ -156,15 +359,21 @@ if ($TeamCount.IsPresent -or $IncludeTeams.IsPresent) {
   $Modules = Get-Module -Name MicrosoftTeams -ListAvailable
   if ($Modules.count -eq 0)
   {
-    Write-Host Please install MicrosoftTeams module using below command: `nInstall-Module MicrosoftTeams -ForegroundColor yellow
+    WriteError Please install MicrosoftTeams module using below command: `nInstall-Module MicrosoftTeams 
     exit
   }
-  Write-Host " -IncludeTeams is a slow option" -BackgroundColor DarkRed
-  try {
-    Get-TeamsApp -ErrorAction Stop | Out-Null
-  } catch {
-    Connect-MicrosoftTeams | Out-Null
-    
+  Write-Host " -IncludeTeams is a slow option (maybe 4X slower)" -BackgroundColor DarkRed
+  if ((Get-PSSession | Where-Object Name -like "SfBPowerShellSession*").count -eq 1) {
+    $id = ((Get-PSSession | Where-Object Name -like "SfBPowerShellSession*").InstanceId) 
+#    #if ((Get-PSSession -InstanceId $id).State -like "Broken") {
+      Remove-PSSession -InstanceId $id
+#    #  }
+      
+     }
+  if ((Get-PSSession | Where-Object Name -like "SfBPowerShellSession*").count -eq 0)  {
+    Import-Module MicrosoftTeams
+    $sfbSession = New-CsOnlineSession -Credential $credObject
+    Import-PSSession $sfbSession -AllowClobber | Out-Null
   }
 
 }
@@ -173,25 +382,27 @@ if ($IncludeExchange.IsPresent) {
   $Modules = Get-Module -Name ExchangeOnlineManagement -ListAvailable
   if ($Modules.count -eq 0)
   {
-    Write-Host Please install ExchangeOnlineManagement module using below command: `nInstall-Module ExchangeOnlineManagement -ForegroundColor yellow
+    WriteError Please install ExchangeOnlineManagement module using below command: `nInstall-Module ExchangeOnlineManagement 
     exit
   }
   if (!((Pssession).Name -like "Exchange*")) {
-    Connect-ExchangeOnline | Out-Null
+  #ERICH
+    Connect-ExchangeOnline -ConnectionUri https://outlook.office365.com/powershell-liveid/ -UserPrincipalName $UserName | Out-Null
   }
 
 
 if ($ShowAllColumns.IsPresent) {
-  $Modules = Get-Module -Name AzureADPreview -ListAvailable
+  $Modules = Get-Module -Name AzureAD -ListAvailable
   if ($Modules.count -eq 0)
   {
-    Write-Host Please install AzureADPreview module using below command: `nInstall-Module AzureADPreview -ForegroundColor yellow
+    WriteError Please install AzureAD module using below command: `nInstall-Module AzureAD 
     exit
   }
   try {
     Get-AzureADCurrentSessionInfo -ErrorAction Stop | Out-Null
   } catch {
-    Connect-AzureAD | Out-Null
+    #ERICH
+    Connect-AzureAD -accountid $username |Out-Null
   }
 
 }
@@ -222,6 +433,7 @@ if ($FlushCache.IsPresent) {
   Remove-Item -LiteralPath $EXOCache -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $GrpCache1 -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $GrpCache2 -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $OGrpCache -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $UsrCache -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $AADCache -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $RolCache -ErrorAction SilentlyContinue
@@ -230,39 +442,86 @@ if ($FlushCache.IsPresent) {
 
 
 
-if (UseCache($GrpCache1)) {
-  Write-Progress -Activity "Loading Cached Group List"
-  $E5GroupList = (Get-Content -Raw -LiteralPath $GrpCache1) | ConvertFrom-Json
-  $CRMgroupList = (Get-Content -Raw -LiteralPath $GrpCache2) | ConvertFrom-Json
+if (UseCache($GrpCache2, $false)) {
+  Write-Progress -Activity "Loading Cached Special Group List"
+  $SpecialGroupList = (Get-Content -Raw -LiteralPath $GrpCache2) | ConvertFrom-Json
+  
 
+} else {
+    $SpecialGroupList = [pscustomobject]@()
+
+    Write-Progress -Activity "Loading Group  List"
+    
+    $ShowSpecialGroups |  forEach-object {
+            $G = $_
+           Get-AzureADGroup -SearchString $G | Get-RecursiveAzureAdGroupMemberUsers   | ForEach-Object { 
+           
+            $SpecialGroupList += [pscustomobject]@{ 
+                id = -join ($G, $_.ObjectId) ;
+                Name = $G;
+                
+                objectID = $_.ObjectId;
+                }
+            }
+        }
+  
+  if ($UseCaching) {
+    $SpecialGroupList | ConvertTo-Json -Depth 1 -Compress | Set-Content -LiteralPath $GrpCache2
+    }
+}
+
+
+if (UseCache($GrpCache1, $false)) {
+  Write-Progress -Activity "Loading Cached Special Group List"
+  $E5GroupList = (Get-Content -Raw -LiteralPath $GrpCache1) | ConvertFrom-Json
+  
 
 } else {
 
     Write-Progress -Activity "Loading Group  List"
   $E5GroupList = Get-ADGroup $E5GName | Get-ADGroupMember | Select-Object SID
 
-  $CRMgroupList = Get-ADGroup $CRMGName | Get-ADGroupMember | Select-Object SID
-
+  
   if ($UseCaching) {
     $E5GroupList | ConvertTo-Json -Depth 1 -Compress | Set-Content -LiteralPath $GrpCache1
-    $CRMgroupList | ConvertTo-Json -Depth 1 -Compress | Set-Content -LiteralPath $GrpCache2
     }
 }
 
-if (UseCache($RolCache)) {
-  Write-Progress -Activity "Loading Cached Admin Roles"
-  $RolesList = (Get-Content -Raw -LiteralPath $RolCache) | ConvertFrom-Json
+
+ 
+if ($IncludeGroups.IsPresent) {
+if (UseCache($OGrpCache, $false)) {
+  Write-Progress -Activity "Loading Cached Office Group List"
+  $OfficeGroupList = (Get-Content -Raw -LiteralPath $OGrpCache) | ConvertFrom-Json
+  
 
 } else {
-  Write-Progress -Activity "Loading Admin Roles" 
 
-  $RolesList = [pscustomobject]@()
+  Write-Progress -Activity "Loading OfficGroup  List"
+  $OfficeGroupList = Get-ADGroup $OGrpName | Get-ADGroupMember | Select-Object SID
+
+}
+}
+
+
+if ($ShowAllColumns.IsPresent) {
+
+  if (UseCache($RolCache, $true)) {
+    Write-Progress -Activity "Loading Cached Admin Roles"
+    $RolesList = (Get-Content -Raw -LiteralPath $RolCache) | ConvertFrom-Json
+
+  } else {
+    Write-Progress -Activity "Loading Admin Roles" 
+
+    $RolesList = [pscustomobject]@()
 
     $i = 1
     $GMR = (get-msolrole)
-    $GMR | ForEach-Object { 
+    $AMR  = (Get-AzureADDirectoryRole )
+    
+     $GMR | ForEach-Object { 
         $RName = $_.Name
-        Write-Progress -Activity "Loading Admin Roles" -CurrentOperation  ($i.ToString() + "- " +$Rname) -PercentComplete ($i * 100 / $GMR.count)
+        Write-Progress -Activity "Loading MSOL Admin Roles" -CurrentOperation  ($i.ToString() + "- " +$Rname) -PercentComplete ($i * 100 / ($GMR.count ))
         $i++
         Get-MsolRoleMember -RoleObjectId $_.ObjectID  | forEach-object {
           $RolesList += [pscustomobject]@{ 
@@ -275,20 +534,21 @@ if (UseCache($RolCache)) {
                 }
             }
         }
-  
+ 
 
+    
   
   if ($UseCaching) {
 
     $RolesList | ConvertTo-Json | Set-Content -LiteralPath $RolCache
     
     }
+  }
 }
 
 
-
 if ($IncludeExchange.IsPresent) {
-  if (UseCache( $EXOCache, "Exchange")) {
+  if (UseCache( $EXOCache, $false)) {
     Write-Progress -Activity "Loading Cached Exchange List"
     $EXOList = (Get-Content -Raw -LiteralPath $EXOCache | ConvertFrom-Json)
     
@@ -296,26 +556,38 @@ if ($IncludeExchange.IsPresent) {
   else {
     
     Write-Progress -Activity "Loading Exchange List"
-    $EXOList = (Get-EXORecipient -ResultSize 50000 -Properties PrimarySmtpAddress,RecipientType,RecipientTypeDetails,DistinguishedName -RecipientType DynamicDistributionGroup,MailContact,MailNonUniversalGroup,MailUniversalDistributionGroup,MailUniversalDistributionGroup,MailUser,UserMailbox)
-
+    # $EXOList = (Get-EXORecipient -ResultSize 50000 -Properties PrimarySmtpAddress,RecipientType,RecipientTypeDetails,DistinguishedName -RecipientType DynamicDistributionGroup,MailContact,MailNonUniversalGroup,MailUniversalDistributionGroup,MailUniversalDistributionGroup,MailUser,UserMailbox)
+    # Ignore Health mailboxes
+    $EXOList = (Get-EXORecipient -ResultSize 50000 -Properties PrimarySmtpAddress,RecipientType,RecipientTypeDetails,DistinguishedName, ExternalDirectoryObjectId, Capabilities, Database,StorageGroupName -RecipientType DynamicDistributionGroup,MailNonUniversalGroup,MailUniversalDistributionGroup,MailUniversalDistributionGroup,MailUser,UserMailbox) | Where-Object PrimarySmtpAddress -NotLike "Health*"
 
     
     for ($i = 0; $i -lt $EXOList.Length; $i++)
     {
       $EXOList[$i].PrimarySmtpAddress = $EXOList[$i].PrimarySmtpAddress.ToLower()
+    
+      # Re-write/re-purpose the StorageGroupName field to be a Mailbox type field  
+      $EXOList[$i].StorageGroupName = switch ($EXOList[$i].RecipientTypeDetails) {
+            'MailUser'                       {'On-Premise' }
+            'UserMailbox'                    {'Online' }
+            'MailContact'                    {'Contact' }
+            'MailUniversalDistributionGroup' {'Distribution Group' }
+            'GuestMailUser'                  {'Guest user' }
+            'MailUniversalSecurityGroup'     {'Security Group' }
+            default { $EXOList[$i].RecipientTypeDetails.Replace('Mailbox', ' Mailbox') }
+            }    
     }
     if ($UseCaching) {
         ($EXOList) | ConvertTo-Json -Compress | Set-Content -LiteralPath $EXOCache
         }
   }
     
-  Write-Progress -Activity ("Exchange list size" + $EXOList.count)
+  Write-Progress -Activity ("Exchange list size: " + $EXOList.count)
 }
 
 $AADList = $null
 
 if ($ShowAllColumns.IsPresent -and !$DisplayIt) {
-  if (UseCache( $AADCache, "AAD")) {
+  if (UseCache( $AADCache, $false)) {
     
     $AADList = (Get-Content -Raw -LiteralPath $AADCache | ConvertFrom-Json)
 
@@ -338,7 +610,7 @@ $IgnoreObjects = @("HealthMailbox*")
 
 if ($CheckFor -ne "") {
   $who = (Get-MsolUser -SearchString $CheckFor)
-  Write-Host "Searching for Users: " $CheckFor -
+  Write-Host "Searching for Users: " $CheckFor -BackgroundColor DarkYellow
 
  
 } else {
@@ -349,8 +621,8 @@ if ($CheckFor -ne "") {
   } elseif ($TopX -ne -1) {
     $who = (Get-MsolUser -MaxResults $TopX)
 
-  } elseif ($Summary.IsPresent) {
-    $who = (Get-MsolUser -EnabledFilter EnabledOnly -All | Where-Object isLicensed -EQ true)
+ # } elseif ($Summary.IsPresent -or $IncludeSummary.IsPresent ) {
+ #   $who = (Get-MsolUser -All | Where-Object isLicensed -EQ true)
   } else {
     $who = (Get-MsolUser -All)
 
@@ -359,25 +631,15 @@ if ($CheckFor -ne "") {
 }
 
 
+#--------------------------------------------------------------------------------------------------------------
+# Summary and end
+#--------------------------------------------------------------------------------------------------------------
+
+
 $progressCnt = $who.count
 
 if ($Summary.IsPresent) {
-  Write-Host "----------     Summary       -----------" -BackgroundColor DarkYellow
-
-  Write-Output ("Total users account in Azure " + $progressCnt)
-  if ($IncludeExchange.IsPresent) {
-    Write-Output ("Mailboxes")
-    Write-Output ("   online          " + ($EXOList.RecipientType | Select-String "UserMailbox").count)
-    Write-Output ("   On-Premise      " + ($EXOList.RecipientType | Select-String "MailUser").count)
-    Write-Output ("   Contacts        " + ($EXOList.RecipientType | Select-String "MailContact").count)
-    Write-Output ("   Distribute List " + ($EXOList.RecipientType | Select-String "MailUniversalDistributionGroup").count)
-    Write-Output ("   Guest IDs       " + ($EXOList.RecipientTypeDetails | Select-String "GuestMailUser").count)
-
-
-  }
-  Write-Output ("Licensed & Enabled accounts " + $who.count)
-  Write-Output ("Users in Azure License E5   " + $E5GroupList.count)
-  Write-Output ("Users in CRM Group          " + $CRMgroupList.count)
+  doSummary
   exit
 }
 if ((Get-Item -LiteralPath $UsrCache -ErrorAction SilentlyContinue).LastWriteTime -gt (Get-Date).AddDays($CacheAge)) {
@@ -386,7 +648,7 @@ if ((Get-Item -LiteralPath $UsrCache -ErrorAction SilentlyContinue).LastWriteTim
 }
 else {
 
-  $AdAllUsers = Get-ADUser -Filter * -Properties msRTCSIP-DeploymentLocator,msRTCSIP-UserEnabled,DistinguishedName,msRTCSIP-PrimaryHomeServer,manager,Title,UserPrincipalName,EmployeeNumber -ResultSetSize 50000
+  $AdAllUsers = Get-ADUser -Filter * -Properties msRTCSIP-DeploymentLocator,msRTCSIP-UserEnabled,DistinguishedName,msRTCSIP-PrimaryHomeServer,manager,Title,UserPrincipalName,EmployeeNumber,msExchHomeServerName -ResultSetSize 50000
   for ($i = 0; $i -lt $AdAllUsers.Length; $i++)
   {
     try {
@@ -398,10 +660,15 @@ else {
     }
   }
 
-  ($AdAllUsers) | Select-Object msRTCSIP-DeploymentLocator,msRTCSIP-UserEnabled,DistinguishedName,msRTCSIP-PrimaryHomeServer,manager,Title,SID,UserPrincipalName,ObjectGUID,ObjectClass,Name,EmployeeNumber | ConvertTo-Json -Compress | Set-Content -LiteralPath $UsrCache
+  ($AdAllUsers) | Select-Object msRTCSIP-DeploymentLocator,msRTCSIP-UserEnabled,DistinguishedName,msRTCSIP-PrimaryHomeServer,manager,Title,SID,UserPrincipalName,ObjectGUID,ObjectClass,Name,EmployeeNumber,msExchHomeServerName | ConvertTo-Json -Compress | Set-Content -LiteralPath $UsrCache
 }
 
+#--------------------------------------------------------------------------------------------------------------
 # Build the list of fields that will be dumped
+#
+#
+# Column List
+#--------------------------------------------------------------------------------------------------------------
 
 $ColumnOut = 'DisplayName','UserPrincipalName'
 if ($ShowAllColumns.IsPresent) {
@@ -422,32 +689,39 @@ if ($ShowAllColumns.IsPresent) {
 }
 if ($IncludeExchange.IsPresent) {
   $ColumnOut += 'ExOStatus'
+  if ($ShowAllColumns.IsPresent) {  
+    $ColumnOut += 'ExODetails'
+    }
 }
 
 $ColumnOut += 'E5Licensed'
 if ($ShowAllColumns.IsPresent) {
-    $ColumnOut +='CRMuser'
+    $ColumnOut +='SpecialGroups'
     }
 
 if ($ShowAllColumns.IsPresent) {
   $ColumnOut += 'PrimarySMTP','IsAdmin','AdminRoles','ExtraLicense'
 }
 if ($ShowAllColumns.IsPresent) {
-  $ColumnOut +=  'Title','Manager','Type','Source', 'EmployeeNumber', 'CreateType','LastSignin'
+  $ColumnOut +=  'Title','Manager','Type','Source', 'EmployeeNumber', 'CreateType', 'PhoneNumber', 'GroupCount'
 }
 
+
+
+
 $looptime = Get-Date
-#
+#--------------------------------------------------------------------------------------------------------------
 #
 #Loop through each user 
 #
+#--------------------------------------------------------------------------------------------------------------
 $who | ForEach-Object {
   $UserCount++
 
   $DisplayName = $_.DisplayName
   $LastName = $_.LastName
   $Oid = $_.ObjectId
-
+  $GroupCount ="-"
 
   $Upn = $_.UserPrincipalName
   $Lupn = $upn.ToLower()
@@ -470,13 +744,14 @@ $who | ForEach-Object {
 
   
   $isTeams = ""
-  $ExOStatus = ""
+  $ExOStatus = "NC"
+  $ExODetails = ""
   $UserType = ""
   $CreateType = ""
   $MFAStatus = $_.StrongAuthenticationRequirements.State
   $MethodTypes = $_.StrongAuthenticationMethods
   $E5Licensed = ""
-  $CRMuser = ""
+  $SpecialGroups = ""
   $ExOStatus = "NC"
   $Manager = "NC"
   $ExtraLicense = ""
@@ -516,11 +791,11 @@ $who | ForEach-Object {
 
   #   return
   # }
-  $lastTime = $thisUser.lastSignInDateTime
+  # $lastTime = $thisUser.lastSignInDateTime
 
 
   #Filter result based on License status 
-  if (($LicensedUserOnly.IsPresent) -and ($_.IsLicensed -eq $False))
+  if ((($LicensedUserOnly.IsPresent) -and ($_.IsLicensed -eq $False)) -and -not $ShowAllColumns.IsPresent)
   {
 
     return
@@ -548,12 +823,16 @@ $who | ForEach-Object {
     }
   }
   #Filter result based on Admin users 
-  if (($AdminOnly.IsPresent) -and ([string]$IsAdmin -eq "False"))
+  if (($AdminOnly.IsPresent) -and ([string]$IsAdmin -eq "-"))
   {
     return
   }
 
-  
+  #--------------------------------------------------------------------------------------------------------------
+  # MFA
+  #
+  #
+
 
   # checking this user if the not disabled, has MFA or if ListAll
 
@@ -595,7 +874,7 @@ $who | ForEach-Object {
     $DefaultMFAMethod = ($_.StrongAuthenticationMethods | Where-Object { $_.IsDefault -eq "True" }).MethodType
     $MFAPhone = $_.StrongAuthenticationUserDetails.PhoneNumber
     if ($MFAPhone -like "+1*") {
-      $MFAPhone = ($MFAPhone.Substring(1,5)) + "-xxx-xx" + ($MFAPhone.Substring($MFAPhone.Length - 2))
+      $MFAPhone = ($MFAPhone.Substring(1,5)) + "-" + ($MFAPhone.Substring(6,1)) + "xx-xx" + ($MFAPhone.Substring($MFAPhone.Length - 2))
     }
     $MFAEmail = $_.StrongAuthenticationUserDetails.Email
 
@@ -626,6 +905,8 @@ $who | ForEach-Object {
       }
     }
     $Title = $findAD.Title
+
+    # If you have EMployee or contractor attributes used or not users in on-premise AD.    CONFIGURATIONHERE
     if ($ShowEmpNum.IsPresent) {
         $EmployeeNumber = $findAD.EmployeeNumber
         }
@@ -636,44 +917,39 @@ $who | ForEach-Object {
             if ($EmployeeNumber -ne $null) {
                 $EmployeeNumber = $EmployeeNumber.ToString()
                 if ($EmployeeNumber.Length -gt 3) {
-                    $EmployeeNumber = -join($EmployeeNumber.remove(3), "xxx")
+                    $EmployeeNumber = $EmployeeNumber -replace "\d\d\d$", "xxx"  
                     }
                 }
             }
         }
+
+
+#--------------------------------------------------------------------------------------------------------------
+# GROUPS
+#
+#
+
     $E5Licensed = "-"
-    $CRMuser = "-"
+    $SpecialGroups = "-"
 
     # $E5GroupList.SID
     if ($findAD.DistinguishedName -ne $null) {
       if ($findAD.SID.Value -in $E5GroupList.SID) {
         $E5Licensed = "True"
       }
-      # if ($CRMGname -in $adgroups.name) {
-      if ($findAD.SID.Value -in $CRMgroupList.SID) {
-        $CRMuser = "True"
-      }
+      
+       $SpecialGroups = ($SpecialGroupList |Where-Object objectID -like $oid).Name
+       
+      
     }
 
-    # $EXOList = (Get-EXORecipient -PrimarySmtpAddress $upn -ResultSize 10  -RecipientType MailUser, UserMailbox -ErrorAction Ignore| Select-Object PrimarySmtpAddress,  RecipientType, RecipientTypeDetails)
-
-    #        }
-    #    else {
-    #       
-    #       if ($Oid -in $E5.Objectid )
-    #       {
-    #         $E5Licensed="True" 
-    #
-    #        } 
-    #        if ($Oid -in $CRMgroup.Objectid)
-    #        {
-    #          $CRMuser="True" 
-    #
-    #        } 
-    #    }
+#--------------------------------------------------------------------------------------------------------------
+# Licensing 
+#
+#
+# https://docs.microsoft.com/en-us/azure/active-directory/users-groups-roles/licensing-service-plan-reference
 
 
-    # https://docs.microsoft.com/en-us/azure/active-directory/users-groups-roles/licensing-service-plan-reference
         $lic = $thisUser | Select-Object -ExpandProperty licenses | Where-Object accountskuid -Like $sku | Select-Object -ExpandProperty servicestatus
         # $lic | ft
         for ($k = 0; $k -lt ($lic).count; $k++)
@@ -726,14 +1002,21 @@ $who | ForEach-Object {
       $MFAPhone = "-"
       $MFAEmail = "-"
       $E5Licensed = "-"
-      $CRMuser = "-"
-      $ExOStatus = "-"
+      $SpecialGroups = "-"
+      $ExOStatus = "NC-"
       $Manager = "-"
 
     }
+                   
+
+#--------------------------------------------------------------------------------------------------------------
+# Exchange
+#
+#
+
     if ($IncludeExchange.IsPresent) {
 
-      $ExOStatus = ""
+      $ExOStatus = "Nobox"
       $SIPLocation = ""
 
       # $find = ($EXOList | Where-Object {$_.PrimarySmtpAddress -like $Upn})
@@ -743,20 +1026,30 @@ $who | ForEach-Object {
       $i = ($EXOList.ExternalDirectoryObjectId | Select-String $oid).LineNumber - 1
             
       if (($i -ne $null) -and ($i -ne -1)) {
-        $ExOStatus = $EXOList[$i].RecipientTypeDetails
+        if  ($EXOList[$i].StorageGroupName -like "On-Premise") {
+            if ($findAD.msExchHomeServerName -like "") {
+                $EXOList[$i].StorageGroupName  = "-"
+                $EXOList[$i].RecipientType = "-"
+                
+                }
+            }
+
+        $ExOStatus = $EXOList[$i].StorageGroupName 
+        $ExODetails = $EXOList[$i].RecipientType + "/" + $EXOList[$i].RecipientTypeDetails
         $PrimeSMTP = $EXOList[$i].PrimarySmtpAddress
+        
         }
         else { $PrimeSMTP ="<??>" }
     
 
 
-      $ExOStatus = switch ($ExOStatus) {
-        "UserMailbox" { "ExchangeOneline" }
-        "MailUser" { "On-Premise" }
-        "MailContact" { "Contact" }
-        default { $ExOStatus }
-      }
     }
+
+#--------------------------------------------------------------------------------------------------------------
+# Teams/Skype Status
+#
+#
+
     $spl = @("","")
     if ($findad -ne $null) {
     if ((($findad).'msRTCSIP-PrimaryHomeServer') -ne $null) {
@@ -774,22 +1067,58 @@ $who | ForEach-Object {
     }
     
     }
-
-    $TeamState = ""
-    $TeamFedState = ""
-    if ($IncludeTeams.IsPresent) {
-      $TeamState = Get-CsUserPolicyAssignment -PolicyType TeamsUpgradePolicy -Identity $Upn -ErrorAction SilentlyContinue | Select-Object -ExpandProperty PolicyName
-      
-      $TeamFedState += Get-CsUserPolicyAssignment -PolicyType ExternalAccessPolicy -Identity $Upn -ErrorAction SilentlyContinue | Select-Object -ExpandProperty PolicyName
-      
-      # $TeamState = $TeamState -join (Get-CsUserPolicyAssignment -PolicyType OnlineVoiceRoutingPolicy  -Identity $Upn       | Select-Object -ExpandProperty PolicyName)
-      # if ($TeamState -eq "") { $TeamState = "Default" }
-      # if ($TeamFedState -eq "") { $TeamFedState = "Default" }
-    }
-    else {
-      $TeamState = ""
+    $TeamsCS = @{}
+    $TeamsState = ""
+    $TeamsFedState = ""
+    if (($IncludeTeams.IsPresent) -and ($UserType -eq "User")) {
+      $TeamsCS = (get-csonlineuser -Identity $Upn) 
+      $TeamsState =  $TeamsCS | Select-Object -ExpandProperty TeamsUpgradeEffectiveMode -ErrorAction SilentlyContinue
+      $TeamsState += "," + $TeamsCS | Select-Object -ExpandProperty TeamsUpgradePolicy -ErrorAction SilentlyContinue
+      $TeamsState += "," + $TeamsCS | Select-Object -ExpandProperty HostedVoicemailPolicy -ErrorAction SilentlyContinue
+      $TeamsFedState =  $TeamsCS | Select-Object -ExpandProperty ExternalAccessPolicy -ErrorAction SilentlyContinue      
     }
 
+ # ------------------------------------------------------
+ # Count Staff Conditional
+ #
+ #
+    if ($findAD -ne $null) {
+        if  ($ActivationStatus -eq "Yes" -and $_.IsLicensed) {        
+            $n = $findAD.EmployeeNumber
+            
+                # if online with ExO switch otherwise igore Online
+                # Numbering of Contractors is different than employees
+                if ($n -gt 0) {                    
+                     if ($ExOStatus -eq "Online" -or (-not $IncludeExchange.IsPresent)) { 
+                        if ($EmployeeNumber -lt 400000) {
+                            $EmpoyeeCount++
+                            }
+                        else {
+                            $ContractCount++
+                            }
+                        
+                     } else {
+                        if ($EmployeeNumber -lt 400000) {
+                            $EmpoyeeCountLeft++
+                            }
+                        else {
+                            $ContractCountLeft++
+                            }
+                        }
+                   
+                   }
+                }
+            }
+        
+ 
+
+#--------------------------------------------------------------------------------------------------------------
+# Extra attributes
+#   E-mail address
+#   Creation date and state for Guest
+#   Source
+#
+#
 
     if ($ShowAllColumns.IsPresent) {
       if ($AADList -eq $null) {
@@ -808,6 +1137,7 @@ $who | ForEach-Object {
       }
       $UserType = $AzUser.UserType
 
+      $GroupCount = ($AzUser | Get-AzureADUserMembership).count
       #
       # Guests
       #
@@ -831,12 +1161,17 @@ $who | ForEach-Object {
       } else {
         $CreateType = -join ($CreateType," (",$AzUser.UserState,":",$AzUser.UserStateChangedOn,")")
       }
+      
     }
     #Print to output file 
     $PrintedUser++
     ## # not exporting "cntTeams"=$cntTeams;
 
-    $Result = @{ 'DisplayName' = $DisplayName; 'UserPrincipalName' = $upn; 'MFAStatus' = $MFAStatus; 'ActivationStatus' = $ActivationStatus; 'DefaultMFAMethod' = $DefaultMFAMethod; 'AllMFAMethods' = $Methods; 'MFAPhone' = $MFAPhone; 'MFAEmail' = $MFAEmail; 'LicenseStatus' = $_.IsLicensed; 'IsAdmin' = $IsAdmin; 'AdminRoles' = $RolesAssigned; 'SignInStatus' = $SigninStat; 'E5Licensed' = $E5Licensed; 'CRMuser' = $CRMuser; "TeamsVoice" = $isTeams; "TeamsState" = $TeamState; "TeamsFederated" = $TeamFedState; "SIPLocation" = $SIPLocation; "ExOStatus" = $ExOStatus; "ExtraLicense" = $ExtraLicense; "Manager" = $Manager; "Title" = $Title; "Type" = $UserType; "CreateType" = $CreateType; 'PrimarySMTP' = $PrimeSMTP; 'EmployeeNumber' = $EmployeeNumber; 'Source' = $DirSource; 'LastSignin' = $lastTime }
+    $Result = @{ 'DisplayName' = $DisplayName; 'UserPrincipalName' = $upn; 'MFAStatus' = $MFAStatus; 'ActivationStatus' = $ActivationStatus; 'DefaultMFAMethod' = $DefaultMFAMethod; 
+    'AllMFAMethods' = $Methods; 'MFAPhone' = $MFAPhone; 'MFAEmail' = $MFAEmail; 'LicenseStatus' = $_.IsLicensed; 'IsAdmin' = $IsAdmin; 'AdminRoles' = $RolesAssigned; 'SignInStatus' = $SigninStat; 
+    'E5Licensed' = $E5Licensed; 'SpecialGroups' = $SpecialGroups; "TeamsVoice" = $isTeams; "TeamsState" = $TeamsState; "TeamsFederated" = $TeamsFedState; "SIPLocation" = $SIPLocation; "ExOStatus" = $ExOStatus;
+    "ExODetails" = $ExODetails; "ExtraLicense" = $ExtraLicense; "Manager" = $Manager; "Title" = $Title; "Type" = $UserType; "CreateType" = $CreateType; 'PrimarySMTP' = $PrimeSMTP; 'EmployeeNumber' = $EmployeeNumber; 
+     'Source' = $DirSource; 'LastSignin' = $lastTime ; 'PhoneNumber' = $thisUser.PhoneNumber; 'GroupCount' = $GroupCount}
     $Results = New-Object PSObject -Property $Result
 
 
@@ -848,6 +1183,10 @@ $who | ForEach-Object {
       $ResultOut | Export-Csv -Path $ExportCSVReport -Notype -Append
     }
   }
+#--------------------------------------------------------------------------------------------------------------
+# Disabled Users
+#
+#
 
   #Check for disabled userwe 
   elseif (($DisabledOnly.IsPresent) -and ($MFAStatus -eq $Null) -and ($_.StrongAuthenticationMethods.MethodType -eq $Null))
@@ -860,6 +1199,10 @@ $who | ForEach-Object {
 
     $Result = @{ 'DisplayName' = $DisplayName; 'UserPrincipalName' = $upn; '$Department' = $Department; 'MFAStatus' = $MFAStatus; 'LicenseStatus' = $_.IsLicensed; 'IsAdmin' = $IsAdmin; 'AdminRoles' = $RolesAssigned; 'SignInStatus' = $SigninStat }
     $Results = New-Object PSObject -Property $Result
+#--------------------------------------------------------------------------------------------------------------
+# Show or Write to a CSV file the results
+#
+#
 
     if ($DisplayIt) {
       $Results | Select-Object DisplayName,UserPrincipalName,MFAStatus,LicenseStatus,IsAdmin,AdminRoles,SignInStatus,lastSignInDateTime | Format-List
@@ -870,8 +1213,20 @@ $who | ForEach-Object {
   }
 }
 
+#--------------------------------------------------------------------------------------------------------------
+# Wrap up
+#
+#
+
+
+
+
 #Open output file after execution  
 Write-Host Script executed successfully - Completed (Get-Date -DisplayHint Time) ((Get-Date).Subtract($runtime).ToString('dd\.hh\:mm\:ss'))
+
+if ($IncludeSummary.IsPresent) {
+   doSummary
+   }
 if ($DisplayIt) {
   if ($PrintedUser -gt 0) {
     Write-Host Found $PrintedUser users
@@ -899,15 +1254,28 @@ if ($DisplayIt) {
   }
   elseif ((Test-Path -Path $ExportCSVReport) -eq "True")
   {
-    Write-Host "MFA Enabled user report available in: $ExportCSVReport"
+    Write-Host "MFA Enabled user report available in: $ExportCSVReport" -ForegroundColor DarkYellow
 
     $Prompt = New-Object -ComObject wscript.shell
-    $UserInput = $Prompt.popup("Do you want to open output file?",0,"Open Output File",4)
+    $UserInput = $Prompt.popup("Do you want to open output file?",10,"Open Output File",0x124)
     if ($UserInput -eq 6)
     {
       Invoke-Item "$ExportCSVReport"
     }
     Write-Host Exported report has $PrintedUser users of $progressCnt
+    }
+  if ((Test-Path -Path $ExportCSVTeams) -eq "True")
+  {
+    Write-Host "Teams Summary report available in: $ExportCSVTeams" -ForegroundColor DarkYellow
+
+    $Prompt = New-Object -ComObject wscript.shell
+    $UserInput = $Prompt.popup("Do you want to open output file?",10,"Open Teams Report",0x124)
+    if ($UserInput -eq 6)
+    {
+      Invoke-Item "$ExportCSVTeams"
+    }
+    Write-Host Exported report has $PrintedUser users of $progressCnt
+    Write-Host "Teams Site Summary : $ExportCSVTeams" -ForegroundColor DarkYellow
 
   }
   else
@@ -920,6 +1288,9 @@ if ($DisplayIt) {
     }
   }
 }
+
+
+
 
 #Clean up session  
 # Get-PSSession | Remove-PSSession
