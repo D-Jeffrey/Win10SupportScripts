@@ -1274,9 +1274,7 @@ if ($DisplayIt) {
     {
       Invoke-Item "$ExportCSVTeams"
     }
-    Write-Host Exported report has $PrintedUser users of $progressCnt
-    Write-Host "Teams Site Summary : $ExportCSVTeams" -ForegroundColor DarkYellow
-
+    
   }
   else
   {
