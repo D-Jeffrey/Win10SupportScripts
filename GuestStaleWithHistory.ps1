@@ -1,4 +1,4 @@
-#Requires -Modules AzureADPreview, ActiveDirectory
+#Requires -Modules AzureADPreview
 #
 # WIP - Purge old Guest accounts by running this perodically to get the list of accounts, keep it for future runs, then after it pasts the cutoffage, remove the acount
 # also remove accountw which have not accepting their invition and are older then 30 days credit 
@@ -11,8 +11,11 @@
 #    Send Grace period Warning messages that their account will be deleted
 #    Send Grace period warning summary alerts to delegates for invited people
 #    Summary info for how many we put into what state
-
-
+# GuestStaleWithHistory.ps1
+# D-jeffrey on github.com
+#
+# can use AD if module is present
+#
 param
 (
   [Parameter(Mandatory = $false)]
@@ -21,13 +24,20 @@ param
 
 $GuestHistoryPurge = 90
 $GuestHistoryLog = "GuestHistory.Log"
+$hasAD = ((get-module -ListAvailable -name ActiveDirectory).count -gt 0);
 
-$username = (get-aduser $env:username -Properties UserPrincipalName).UserPrincipalName
+if ($hasAD) {
+    $username = (get-aduser $env:username -Properties UserPrincipalName).UserPrincipalName
+    }
 
   try {
     Get-AzureADCurrentSessionInfo -ErrorAction Stop | Out-Null
   } catch {
-    Connect-AzureAD -accountid $username |Out-Null
+    if ($hasAD) {
+        Connect-AzureAD -accountid $username |Out-Null
+        } else {
+        Connect-AzureAD |Out-Null
+        }
   }
 
 # Use the Tenant ID to avoid issues with multi-tenant testing
@@ -74,7 +84,8 @@ $queryStartDateTimeFilter = '{0:yyyy-MM-dd}T{0:HH:mm:sszzz}' -f $lastRun
 
  try { $lastAudit = Get-AzureADAuditSignInLogs -Top 1 -ErrorAction Stop 
     } catch {
-    Write-Host "It appears you do not have SignInLogs access - STOPPING" -ForegroundColor Red -BackgroundColor Yellow 
+    Write-Host "It appears you do not have SignInLogs access - STOPPING" -ForegroundColor Red -BackgroundColor Yellow
+    break 
     }
 
 
@@ -128,12 +139,15 @@ foreach ($guestUser in $guestUsers)
         # Force all null to today (so we don't age them out too quickly)  very useful during FirstRun
         #
 
-        if ($theOldGuest[$theOldGuest.count-1].UserStateChangedOn) -eq $null {
+        if (($theOldGuest[$theOldGuest.count-1].UserStateChangedOn) -eq $null) {
             $guestState30[$i].UserStateChangedOn = $queryStartDateTimeFilter
             $guestState30[$i].UserState = "ForcedAge"
             }
-    }
-        }
+      } else {
+      $guestUserSignIns
+      $theOldGuest += ($guestUser | select objectid, userprincipalname, Mail,CreationType, UserState, UserStateChangedOn)
+      
+     }
      $i = $i+1
      Write-Progress "Searching Guests " -PercentComplete ($i / $guestUsers.count*100)
 
