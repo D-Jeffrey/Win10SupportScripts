@@ -23,7 +23,7 @@ param
   [switch]$ForceBack
 )
 
-$Version = "2021.4.3"
+$Version = "2021.4."
 $GuestHistoryPurge = 90
 $GuestHistoryLog = "GuestHistory.Log"
 $hasAD = ((get-module -ListAvailable -name ActiveDirectory).count -gt 0);
@@ -60,20 +60,6 @@ $GuestStateHistory = $env:TEMP  + "\GuestStateHistory." + $Tent.objectid + ".sta
 
 $StartingTime = (get-date) 
 
-Function Set-FileTimeStamp
-
-{ Param (
-    [Parameter(mandatory=$true)]
-    [string[]]$filepath,
-    [datetime]$date = (Get-Date)
-    )
-
-    Get-item -Path $filepath | ForEach-Object {
-
-     $_.CreationTime = $date
-     $_.LastAccessTime = $date
-     $_.LastWriteTime = $date }
-}
 
 
 if ($FirstRun.IsPresent -and (test-Path -LiteralPath $GuestStateHistory)) { 
@@ -257,7 +243,10 @@ write-host ("Saving State for Next Run " + $GuestStateHistory)
  $GuestAll | ConvertTo-Json -Depth 1 | Set-Content -LiteralPath $GuestStateHistory
 
 #set the time back to when we started this.
-Set-FileTimeStamp($GuestStateHistory, $StartingTime)
+
+$setFile = Get-item -Path GuestStateHistory
+$setFile.CreationTime = $StartingTime
+$setFile.LastWriteTime = $StartingTime
 
 $oldCnt = $theOldGuest.count
 Write-Host "---------------------------------------" -ForegroundColor Yellow
