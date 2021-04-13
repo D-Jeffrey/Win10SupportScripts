@@ -146,7 +146,7 @@ foreach ($guestUser in $guestUsers)
 {
     $DN = $guestUser.DisplayName
     $ag = $ActiveGuest.count
-    Write-Progress "Reading logs for Guest $DN" -PercentComplete ($i / $guestUsers.count*100) -Status "Active Guests $ag"
+    Write-Progress "Reading logs for Guest $DN" -PercentComplete ($i / $guestUsers.count*100) -Status "Active Guests: $ag"
 
     # This can trigger errors "Message: This request is throttled."
     # TODO need to better detect and fix
@@ -194,7 +194,7 @@ foreach ($guestUser in $guestUsers)
           
           Write-Verbose ("$DN was active " + $guestUserSignIns.CreatedDateTime)
           $MN = $guestUser.Mail
-          $ActiveGuestsTxt = $ActiveGuestsTxt + "`n$DN ($MN) was active " + $guestUserSignIns.CreatedDateTime
+          $ActiveGuestsTxt = $ActiveGuestsTxt + "`n$DN ($MN) was active " + ('{0:yyyy-MM-dd} {0:HH:mm}' -f $guestUserSignIns.CreatedDateTime)
           $ActiveGuest += $guestUser
           $theOldGuest += [pscustomobject]@{ 
             objectid = $guestUser.objectid;
@@ -214,7 +214,7 @@ foreach ($guestUser in $guestUsers)
 }
     
 write-host ("Progressing Active Guests : " + $guestsum.count)   -ForegroundColor Green
-$theOldGuest | ConvertTo-Json -Depth 1 | Set-Content -LiteralPath ".\Guest30.txt"
+# $theOldGuest | ConvertTo-Json -Depth 1 | Set-Content -LiteralPath ".\Guest30.txt"
 
 
 #
@@ -244,7 +244,7 @@ write-host ("Saving State for Next Run " + $GuestStateHistory)
 
 #set the time back to when we started this.
 
-$setFile = Get-item -Path GuestStateHistory
+$setFile = Get-item -Path $GuestStateHistory
 $setFile.CreationTime = $StartingTime
 $setFile.LastWriteTime = $StartingTime
 
@@ -257,8 +257,12 @@ Write-Output ("Guest who are older than $GuestHistoryPurge days : " + $oldCnt)
 Write-Output ("Total Guests                     : " + $guestUsers.count)
 
 $TN = $Tent.DisplayName
-"Report for $TN `n" | Out-File -file $GuestHistoryLog
-("Pending older than 30 days: " + $PendingAcceptGuests.count) | Out-File -file $GuestHistoryLog
+if (!(Test-Path -Path $GuestHistoryLog)) {
+    "Report for $TN `n" | Out-File -file $GuestHistoryLog    
+    }
+
+"`n** GuestHistory Run: " + (get-date) + "**" | Out-File -file $GuestHistoryLog -Append
+("Pending older than 30 days: " + $PendingAcceptGuests.count) | Out-File -file $GuestHistoryLog -Append
 $PendingAcceptGuests | Sort-Object -Property UserStateChangedOn   | Format-Table -Property Mail,CreationType,UserState,UserStateChangedOn  |  Out-File -file $GuestHistoryLog -Append
 ("Guest who are older than $GuestHistoryPurge days: " + $theOldGuest.count) |  Out-File -file $GuestHistoryLog -Append
 $theOldGuest | Sort-Object -Property UserStateChangedOn   | Format-Table -Property Mail,CreationType,UserState,UserStateChangedOn,LastAccess   |  Out-File -file $GuestHistoryLog -Append
