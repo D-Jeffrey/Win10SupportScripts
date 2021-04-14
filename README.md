@@ -1,6 +1,17 @@
 # Win10 and Office 365 Support Scripts
 Misc Scripts use on Windows 10 computersand others for Office 365 to do some PC Pro support tasks
 
+## __GuestHistory.ps1__
+ WIP - Purge old Guest accounts by running this perodically to get the list of accounts, keep it for future runs, then after it pasts the cutoff age, remove the acount
+also remove accountw which have not accepting their invition and are older then 30 days credit 
+ to https://github.com/chadmcox/Azure_Active_Directory_Scripts/tree/master/Guests
+
+    Check age of State file so if there is more than 30 days between runs, then warn about that
+    TODO Add a ClearHistory Switch to Reset state
+    TODO Send E-mail notifications to users when we have removed them from the system
+    TODO Send Grace period Warning messages that their account will be deleted
+    TODO Send Grace period warning summary alerts to delegates for invited people
+ 
 
 ## __PSTMoveFromOneDrive.ps1__
  Designed to move PST files outside of OneDrive directory space at logon time.
