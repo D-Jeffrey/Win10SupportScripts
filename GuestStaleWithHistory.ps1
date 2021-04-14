@@ -25,9 +25,10 @@ param
   [boolean]$TestOnly = $true
 )
 
-$Version = "2021.4.5"
-$GuestHistoryPurge = 90
-$GuestHistoryGrace = 30
+$Version = "2021.4.6"
+$GuestHistoryPurge = 90    #days 
+$GuestHistoryGrace = 30    #days 
+$AcceptInvite = 30         #days     
 $GuestHistoryLog = "GuestHistory.Log"
 $hasAD = ((get-module -ListAvailable -name ActiveDirectory).count -gt 0)
 
@@ -62,7 +63,7 @@ if ($hasAD) {
   
 # Use the Tenant ID to avoid issues with multi-tenant testing
 $Tent = (Get-AzureADTenantDetail)
-$GuestStateHistory = $env:TEMP  + "\GuestStateHistory." + $Tent.objectid + ".state"
+$GuestStateHistory = $env:TEMP  + "\GuestStateHistory." + $Tent.ObjectID + ".state"
 
 $StartingTime = (get-date) 
 
@@ -122,6 +123,10 @@ Write-Host "============================================"
 
 
 Write-host $lastRunTxt
+Write-verbose "GuestHistoryPurge = $GuestHistoryPurge"
+Write-verbose "GuestHistoryGrace = $GuestHistoryGrace"
+
+
 $lastRun = $lastRun.AddHours(-1)
 $queryStartDateTimeFilter = '{0:yyyy-MM-dd}T{0:HH:mm:sszzz}' -f $lastRun.AddHours(-1)
 
@@ -133,18 +138,19 @@ $queryStartDateTimeFilter = '{0:yyyy-MM-dd}T{0:HH:mm:sszzz}' -f $lastRun.AddHour
     break 
     }
 
+
 Write-Progress -Activity "Getting Old Expire Invite Guest" 
- #Delete guest that are pending acceptance and disabled for longer than 30 days
-  write-host "Accounts to Delete because they have not accepted their invite in 30 days" -ForegroundColor Yellow
+ #Delete guest that are pending acceptance and disabled for longer than $AcceptInvite days
+  write-verbose "Getting accounts to Delete because they have not accepted their invite in $AcceptInvite days" 
   $PendingAcceptGuests = Get-AzureADUser -Filter "userType eq 'Guest'" -all $true -PipelineVariable guest | `
-  where {($_.userstate -eq 'PendingAcceptance') -and ((get-date $($_.UserStateChangedOn)) -lt $((get-date).adddays(-30))) -and $_.accountenabled -eq $false} 
+  where {($_.userstate -eq 'PendingAcceptance') -and ((get-date $($_.UserStateChangedOn)) -lt $((get-date).adddays(-$AcceptInvite))) -and $_.accountenabled -eq $false} 
    
 
 
   $guestUsers = Get-AzureADUser -Filter "userType eq 'Guest'" -all $true
 
 $TG = $guestUsers.count
-write-host "Getting Active Guests " -ForegroundColor Green
+write-verbose "Getting Active Guests "
 Write-Progress -Activity "Getting accounts" 
 
 
@@ -166,7 +172,7 @@ foreach ($guestUser in $guestUsers)
     $DN = $guestUser.DisplayName
     $ag = $ActiveGuest.count
     Write-Progress "Reading logs for Guest: $DN  ($i of $TG)" -PercentComplete ($i / $guestUsers.count*100) -Status "Active Guests: $ag"
-    Write-Verbose "Reading: $DN (" +   $guestUser.Mail + ")"
+    Write-Verbose ("Reading: $DN (" +   $guestUser.Mail + ")")
     # This can trigger errors "Message: This request is throttled."
     # TODO need to better detect and fix
     if ($i % 100 -eq 0) {
@@ -193,7 +199,7 @@ foreach ($guestUser in $guestUsers)
         # Force all null to today (so we don't age them out too quickly)  very useful during FirstRun
         #
         
-        if ($guestStateAll -ne $null -and ! $guestStateAll.ObjectId.Contains($guestUser.objectid)) {
+        if ($guestStateAll -ne $null -and ! $guestStateAll.ObjectID.Contains($guestUser.ObjectID)) {
            if (($oldMissingGuest.UserStateChangedOn) -eq $null) {
                $oldMissingGuest.UserStateChangedOn = $queryStartDateTimeFilter
                $oldMissingGuest.UserState = $oldMissingGuest.UserState + "/ForcedChangedOn"
@@ -201,7 +207,7 @@ foreach ($guestUser in $guestUsers)
                }
            $oldMissingGuest.UserState = $oldMissingGuest.UserState + "/ForcedLastAccess"
            $theOldGuest += [pscustomobject]@{
-                objectid = $guestUser.objectid;
+                ObjectID = $guestUser.ObjectID;
                 userprincipalname = $guestUser.userprincipalname;
                 Mail = $guestUser.Mail;
                 CreationType = $guestUser.CreationType;
@@ -221,7 +227,7 @@ foreach ($guestUser in $guestUsers)
           $ActiveGuestsTxt = $ActiveGuestsTxt + "`n$DN ($MN) was active " + ('{0:yyyy-MM-dd} {0:HH:mm}' -f $guestUserSignIns.CreatedDateTime)
           $ActiveGuest += $guestUser
           $theOldGuest += [pscustomobject]@{ 
-            objectid = $guestUser.objectid;
+            ObjectID = $guestUser.ObjectID;
             userprincipalname = $guestUser.userprincipalname;
             Mail = $guestUser.Mail;
             CreationType = $guestUser.CreationType;
@@ -239,7 +245,7 @@ foreach ($guestUser in $guestUsers)
 
 }
     
-write-host ("Processing Active Guests : " + $guestsum.count)   -ForegroundColor Green
+write-verbose ("Processing Active Guests : " + $ActiveGuest.count)   
 # $theOldGuest | ConvertTo-Json -Depth 1 | Set-Content -LiteralPath ".\Guest30.txt"
 
 
@@ -250,7 +256,7 @@ write-host ("Processing Active Guests : " + $guestsum.count)   -ForegroundColor 
 
 
 # Sorting on UserState will keep ForceAge with the older (no-null) date
-$GuestAll = ($theOldGuest + $guestStateAll) | Sort-Object  -Property ObjectId, LastAccess  | Sort-Object -Unique -Property ObjectId
+$GuestAll = ($theOldGuest + $guestStateAll) | Sort-Object  -Property ObjectID, LastAccess  | Sort-Object -Unique -Property ObjectID
 
 
 write-verbose "Old Guests - which should be removed"
@@ -259,32 +265,11 @@ $theOldGuest = $GuestAll | where { (get-date $($_.LastAccess)) -lt $((get-date).
 
     
         # Just cancel any Invites which have not been 
-        Write-Progress -Activity "Removing unaccepted Guests older than 30 days" 
+        Write-Progress -Activity "Removing unaccepted Guests older than $AcceptInvite days" 
        if ($ProductionRun) {
             $PendingAcceptGuests | Remove-AzureADUser
             }
 
-        
-        Write-Progress -Activity "Disable aged inactive accounts with grace" 
-        $theOldGuest  | where { (get-date $($_.LastAccess)) -lt $((get-date).adddays(-$GuestHistoryPurge)) -and (get-date $($_.UserStateChangedOn)) -lt $((get-date).adddays(-$GuestHistoryPurge))} | `
-            ForEach-Object {
-                if (! $_.Warned) { 
-                    # TODO 
-                    # Need to add notifcaiton e-mail and the resposible person
-                    
-                    $memberOf = get-AzureADUser -ObjectId $_.ObjectID  | Get-AzureADUserMembership
-                    
-                    Write-Output ("Send warning e-mail to " + $_.Mail + ", last access as " + $_.LastAccess + ", StateChange on " + $_.UserStateChangedOn + ") disabling account.  Members" + $memberOf.DisplayName)
-                    if ($ProductionRun) {
-                        Set-AzureADUser -ObjectId $_.objectid -AccountEnabled $false
-                        $_.Warned = $true
-                        Get-AzureADUser -ObjectId $_.objectid | FT -HideTableHeaders DisplayName, Mail, userprincipalname, AccountEnabled
-                        }
-                    
-                    Write-Output ("|Disable account " + $_.objectid + " (" + $_.userprincipalname + ")")
-    
-                    }
-            }
         
         Write-Progress -Activity "Removing aged inactive accounts grace expired" 
         
@@ -294,21 +279,42 @@ $theOldGuest = $GuestAll | where { (get-date $($_.LastAccess)) -lt $((get-date).
                 if (! $_.Warned ) { 
                     # TODO 
                     # Need to add notifcaiton e-mail and the resposible person
-                    $memberOf = get-AzureADUser -ObjectId $_.ObjectID | Get-AzureADUserMembership
-                    Write-Output ("Send removed e-mail to " + $_.Mail + ", last access as " + $_.LastAccess + ", StateChange " + $_.UserStateChangedOn + ".  Members" + $memberOf.DisplayName)
+                    $memberOf = get-AzureADUser -ObjectID $_.ObjectID | Get-AzureADUserMembership
+                    Write-Output ("Send removed e-mail to " + $_.Mail + ", last access as " + $_.LastAccess + ", StateChange " + $_.UserStateChangedOn + ".  Member:" + $memberOf.DisplayName)
                     if ($ProductionRun) {
-                        Remove-AzureADUser -ObjectId $_.objectid
-                        $_ | Add-Member -MemberType NoteProperty -Name DeletedOn -Value (get-date)
+                        Remove-AzureADUser -ObjectID $_.ObjectID
+                        $_ | Add-Member -MemberType NoteProperty -Name DeletedOn -Value ((get-date) -f "{D}")
                        
 
                         }
-                    Write-Output ("|Removed account " + $_.objectid + " (" + $_.userprincipalname + ")")
+                    Write-Output ("|Removed account " + $_.ObjectID + " (" + $_.userprincipalname + ")")
                     # TODO
                     # We should get rid of the record in $GuestAll
 
                     }
             }
-        
+            
+        Write-Progress -Activity "Disable aged inactive accounts with grace" 
+        $theOldGuest  | where { (get-date $($_.LastAccess)) -lt $((get-date).adddays(-$GuestHistoryPurge)) -and (get-date $($_.UserStateChangedOn)) -lt $((get-date).adddays(-$GuestHistoryPurge)) -and $($_DeletedOn) -eq $null } | `
+            ForEach-Object {
+                if (! $_.Warned) { 
+                    # TODO 
+                    # Need to add notifcaiton e-mail and the resposible person
+                    
+                    $memberOf = get-AzureADUser -ObjectID $_.ObjectID  | Get-AzureADUserMembership
+                    
+                    Write-Output ("Send warning e-mail to " + $_.Mail + ", last access as " + $_.LastAccess + ", StateChange on " + $_.UserStateChangedOn + ") disabling account.  Member:" + $memberOf.DisplayName)
+                    if ($ProductionRun) {
+                        Set-AzureADUser -ObjectID $_.ObjectID -AccountEnabled $false
+                        $_.Warned = $true
+                        Get-AzureADUser -ObjectID $_.ObjectID | FT -HideTableHeaders DisplayName, Mail, userprincipalname, AccountEnabled
+                        }
+                    
+                    Write-Output ("|Disable account " + $_.ObjectID + " (" + $_.userprincipalname + ")")
+    
+                    }
+            }
+    
 
       
 
@@ -325,13 +331,15 @@ $setFile.CreationTime = $StartingTime
 $setFile.LastWriteTime = $StartingTime
 
 $oldCnt = $theOldGuest.count
-$warnCnt = ($theOldGuest | where { $_.Warned -eq $true -and $_.DeletedOn -eq $null } ).count
-$delCnt = ($theOldGuest | where { $_.DeletedOn -ne $null } ).count
+$warnCnt = ($GuestAll | where { $_.Warned -eq $true -and $_.DeletedOn -eq $null } ).ObjectID.count
+$delCnt = ($GuestAll | where { $_.DeletedOn -ne $null } ).ObjectID.count
+$act30 = ($GuestAll  | where { (get-date $($_.LastAccess)) -gt $((get-date).adddays(-28))}).ObjectID.count    # 4 weeks rolling window
 
 Write-Host "`nSummary`n---------------------------------------" -ForegroundColor Yellow
 
-Write-Output ("Guests active in last 30 days    : " + $guestState30.count)
-Write-Output ("Pending older than 30 days       : " + $PendingAcceptGuests.count)
+Write-Output ("Guests active since last run     : " + $ActiveGuest.count)
+Write-Output ("Guests active in last 28 days    : " + $Act30)
+Write-Output ("Pending older than $AcceptInvite days       : " + $PendingAcceptGuests.count)
 Write-Output ("Guest who are older than "  + $GuestHistoryPurge +" days : " + $oldCnt)
 Write-Output ("Guest who are warned             : " + $warnCnt)
 Write-Output ("Guest historically deleted       : " + $delCnt)
