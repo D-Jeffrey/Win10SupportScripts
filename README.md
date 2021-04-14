@@ -1,5 +1,5 @@
 # Win10 and Office 365 Support Scripts
-Misc Scripts use on Windows 10 computersand others for Office 365 to do some PC Pro support tasks
+Misc Scripts use on Windows 10 computers and others for Office 365 to do some PC Pro support tasks.
 
 ## CheckUser365.ps1
  
