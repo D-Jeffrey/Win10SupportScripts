@@ -18,6 +18,8 @@
 #  -AdminOnly
 #  -LicensedUserOnly
 #  -ConditionalAccessOnly 
+#  -MyDefault          This enable the preferred set of default parameters:
+#                              -IncludeSummary -IncludeExchange -IncludeTeams -ShowMFA -ShowAllColumns
 #
 # if you use the ___Only parameters the results may be not complete.
 # Caching - it takes time to query MS, so in order to acccelrate that, caching was added for Roles, Exo, Groups, AD Users
@@ -71,7 +73,7 @@ param
   [switch]$AdminOnly,
   [switch]$LicensedUserOnly,
   [switch]$ShowEmpNum,
-
+  [switch]$MyDefault,
   [Nullable[boolean]]$SignInAllowed = $null,
   [string]$UserName,
   [string]$Password,
@@ -84,6 +86,14 @@ param
 
 # Extra Licenses to look for  
 # CONFIGURATIONHERE
+
+if ($MyDefault.IsPresent) {
+    $IncludeSummary = $true
+    $IncludeExchange = $true
+    $IncludeTeams = $true
+    $ShowMFA = $true
+    $ShowAllColumns = $true
+    }
 
 $selectSkus = @(
   [pscustomobject]@{ Code = "MCOMEETADV"; Name = "Microsoft365AudioConferencing" }
@@ -110,7 +120,7 @@ $ShowSpecialGroups = @( "App_IPP_Users", "NoPSTGrowth", "FAB-GuestUsers" )
   
 
 
-$scriptversion = "v.21.03.126"
+$scriptversion = "v.21.04.127"
 $runtime = Get-Date
 
 
@@ -139,6 +149,9 @@ $ExportCSV = ".\DisabledUserReport_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` t
 $ExportCSVReport = ".\EnabledUserReport_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` tt).ToString()).csv"
 $ExportCSVTeams = ".\Teams_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` tt).ToString()).csv"
 
+#
+# ----------------- Functions
+#
 function Get-CurrentLine {
   -join ("Line: ",$Myinvocation.ScriptlineNumber)
 }
@@ -279,8 +292,10 @@ function doSummary {
   }
 
 
-
-
+#  ==========================================================================
+#
+#   Start the main code already
+#
 #  ==========================================================================
 # reset connections
 #
@@ -293,23 +308,25 @@ function doSummary {
   }
 
 
- #ERICH
- $Modules = Get-Module -Name SMAAuthoringToolkit -ListAvailable  #needed for Get-AutomationVariable 
-if ($Modules.count -eq 0)
+# -----
+# If AUtomation is not used, then ignore it
+#
+$ClientID = $null
+$Modules = Get-Module -Name SMAAuthoringToolkit -ListAvailable  #needed for Get-AutomationVariable 
+if ($Modules.count -gt 0)
 {
-  WriteError Please install SMAAuthoringToolkit module using below command: `nInstall-Module SMAAuthoringToolkit
-  exit
+    $ClientID = Get-AutomationVariable -Name 'ClientID' -WarningAction SilentlyContinue
 }
- 
-$ClientID = Get-AutomationVariable -Name 'ClientID' -WarningAction SilentlyContinue
+    
+
 
 if ($ClientID -eq $null) {
     $AAMode = $false
     $username = (get-aduser $env:username -Properties UserPrincipalName).UserPrincipalName
-    } else {
+} else {
 # Azure Automate Mode
     $AAMode = $true
-# Turn off Caching for Automate
+    # Turn off Caching for Automate
     if ($UseCaching) {
         $UseCaching = $false
         }
@@ -517,7 +534,7 @@ if ($ShowAllColumns.IsPresent) {
 
     $i = 1
     $GMR = (get-msolrole)
-    $AMR  = (Get-AzureADDirectoryRole )
+    $AMR  += (Get-AzureADDirectoryRole )
     
      $GMR | ForEach-Object { 
         $RName = $_.Name
@@ -530,7 +547,25 @@ if ($ShowAllColumns.IsPresent) {
                 ObjectID = $_.ObjectID ;
                 RoleMemberType = $_.RoleMemberType ;
                 EmailAddress = $_.EmailAddress ;
-                DisplayName = $_.DisplayName
+                DisplayName = $_.DisplayName ;
+                isPIM = $false
+                }
+            }
+        }
+    $GMR = $AMR
+    $GMR | ForEach-Object { 
+        $RName = $_.Name
+        Write-Progress -Activity "Loading Azure Admin Roles" -CurrentOperation  ($i.ToString() + "- " +$Rname) -PercentComplete ($i * 100 / ($GMR.count ))
+        $i++
+        Get-AzureADDirectoryRoleMember -bjectId $_.ObjectID  | forEach-object {
+          $RolesList += [pscustomobject]@{ 
+                Key = -join ($_.ObjectID, $_.UserPrincipalName) ;
+                Name = $RName ;
+                ObjectID = $_.ObjectID ;
+                RoleMemberType = $_.UserType ;
+                EmailAddress = $_.UserPrincipalName ;
+                DisplayName = $_.DisplayName ;
+                isPIM = $false
                 }
             }
         }
