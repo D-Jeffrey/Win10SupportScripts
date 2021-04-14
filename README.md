@@ -3,20 +3,19 @@ Misc Scripts use on Windows 10 computers and others for Office 365 to do some PC
 
 ## CheckUser365.ps1
  
-`-Summary`            will give a summary of Licenses, Groups Mailboxes (if IncludeExchange is used)
-`-IncludeExchange`    Pull mailbox information
-`-CheckFor`           Allow to search for a user or part of a user  ..  -CheckFor Darren
-                      This also makes it just displays the results instead of putting them into a CSV
-`-ShowMFA`            Displays the MFA authenications details
-`-ShowAllColumns`     Pull everything... all columns
-                      If none of the filters are applied it will pull all the objects
-`-IncludeTeams`       give information about TeamsUpgradePolicy and ExternalAccessPolicy, but it is a very slow process
-`-EnabledOnly`
-`-DisabledOnly`
-`-AdminOnly`
-`-LicensedUserOnly`
-`-ConditionalAccessOnly`
-
+    `-Summary`            will give a summary of Licenses, Groups Mailboxes (if IncludeExchange is used)
+    `-IncludeExchange`    Pull mailbox information
+    `-CheckFor`           Allow to search for a user or part of a user  ..  -CheckFor Darren
+                          This also makes it just displays the results instead of putting them into a CSV
+    `-ShowMFA`            Displays the MFA authenications details
+    `-ShowAllColumns`     Pull everything... all columns
+                          If none of the filters are applied it will pull all the objects
+    `-IncludeTeams`       give information about TeamsUpgradePolicy and ExternalAccessPolicy, but it is a very slow process
+    `-EnabledOnly`
+    `-DisabledOnly`
+    `-AdminOnly`
+    `-LicensedUserOnly`
+    `-ConditionalAccessOnly`
 
 This is a complex script which has grown over time.  It was started by Robert Luck 
 - https://gallery.technet.microsoft.com/scriptcenter/Export-Office-365-Users-81747c73
