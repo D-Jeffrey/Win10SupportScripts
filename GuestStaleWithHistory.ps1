@@ -147,6 +147,35 @@ Write-Progress -Activity "Getting Old Expire Invite Guest"
    
 
 
+
+
+$MsgBody = "<!DOCTYPE html>
+<html>
+<head>
+<meta charset='utf-8'>
+<title>Notification of Access Removal</title>
+</head>
+<body>
+%LOGO%
+
+Your access to the %TENANT% has been removed due to inactivity, effective %TODAY%.  You have not used our systems in the last %INACTIVITY% days.
+
+If you should need access again, you will have 30 days to have your access re-activated, after which time, your account will be fully removed from our systems.
+
+
+Account information
+   Guest Account : %UPN%
+   Associated Services: %GROUPS%
+
+
+This is a mandatory service communication. 
+
+%COMPANYADDRESS% 
+
+                </body>
+</html>
+"
+
   $guestUsers = Get-AzureADUser -Filter "userType eq 'Guest'" -all $true
 
 $TG = $guestUsers.count
@@ -175,9 +204,6 @@ foreach ($guestUser in $guestUsers)
     Write-Verbose ("Reading: $DN (" +   $guestUser.Mail + ")")
     # This can trigger errors "Message: This request is throttled."
     # TODO need to better detect and fix
-    if ($i % 100 -eq 0) {
-        Start-Sleep 10
-        }
     # get the Guest users most recent signins
 
     try {
@@ -188,7 +214,7 @@ foreach ($guestUser in $guestUsers)
         Write-Verbose "Stalled reading AzureADAuditSignInLogs"
     
          # we will see if this slows the script enough that MS let's it continue
-        Start-Sleep 15
+        Start-Sleep 30
         $guestUserSignIns = Get-AzureADAuditSignInLogs -Top 1 -Filter "createdDateTime ge $queryStartDateTimeFilter and UserID eq '$($guestUser.ObjectID)'" 
         }
 
@@ -244,6 +270,55 @@ foreach ($guestUser in $guestUsers)
 
 
 }
+ 
+$InviterTxt = "" 
+ 
+$addedUserEvents = Get-AzureADAuditDirectoryLogs -Filter "ActivityDisplayName eq 'Add user' and ActivityDateTime ge $queryStartDateTimeFilter"
+
+#Processing added users
+foreach ($addedUserEvent in $addedUserEvents) 
+{
+    Write-Verbose "Processing added user event"
+
+    if ($inviterId = $addedUserEvent.InitiatedBy.User -ne $null) {
+
+        #Get the inviter reference from the InitiatedBy field
+        $inviterId = $addedUserEvent.InitiatedBy.User.Id
+        $inviteUser = get-AzureADUser -ObjectID  $inviterId
+                $inviteDisplay = $inviteUser.DisplayName
+        
+
+    } else {
+        if ($addedUserEvent.InitiatedBy.App -ne $null) {
+            $inviterId = $addedUserEvent.InitiatedBy.App.ServicePrincipalId
+            $inviteDisplay = $addedUserEvent.InitiatedBy.App.DisplayName
+            }
+        else {
+            $inviteUser = $null
+            $inviteDisplay = "-None-"
+            }
+    }
+                
+                
+             
+     
+    #For each TargetResources, check to see if it's a guest user, and if so, add its Manager
+    foreach ($targetResource in $addedUserEvent.TargetResources)
+    {
+        Write-Verbose "Processing target resource"
+        $addedUser = Get-AzureADUser -ObjectID $targetResource.Id
+        
+        if ($addedUser.UserType -eq "Guest")
+        {
+             $memberOf = $addedUser | Get-AzureADUserMembership
+             $mDisplay = $memberOf.DisplayName
+             Write-Output ("Guest " + $addedUser.DisplayName + " invited by " + $inviteDisplay)
+             $InviterTxt += "Guest: " + $addedUser.DisplayName + " ("+ $addedUser.Mail + ")  invited by " + $inviteDisplay + " On " + $addedUserEvent.ActivityDateTime + ".  Member:" + $memberOf.DisplayName + "`n"
+            
+        }
+    }
+}
+
     
 write-verbose ("Processing Active Guests : " + $ActiveGuest.count)   
 # $theOldGuest | ConvertTo-Json -Depth 1 | Set-Content -LiteralPath ".\Guest30.txt"
@@ -280,7 +355,7 @@ $theOldGuest = $GuestAll | where { (get-date $($_.LastAccess)) -lt $((get-date).
                     # TODO 
                     # Need to add notifcaiton e-mail and the resposible person
                     $memberOf = get-AzureADUser -ObjectID $_.ObjectID | Get-AzureADUserMembership
-                    Write-Output ("Send removed e-mail to " + $_.Mail + ", last access as " + $_.LastAccess + ", StateChange " + $_.UserStateChangedOn + ".  Member:" + $memberOf.DisplayName)
+                    Write-Output ("notepad  to " + $_.Mail + ", last access as " + $_.LastAccess + ", StateChange " + $_.UserStateChangedOn + ".  Member:" + $memberOf.DisplayName)
                     if ($ProductionRun) {
                         Remove-AzureADUser -ObjectID $_.ObjectID
                         $_ | Add-Member -MemberType NoteProperty -Name DeletedOn -Value ((get-date) -f "{D}")
@@ -357,5 +432,8 @@ $PendingAcceptGuests | Sort-Object -Property UserStateChangedOn   | Format-Table
 $theOldGuest | Sort-Object -Property UserStateChangedOn   | Format-Table -Property Mail,CreationType,UserState,UserStateChangedOn,LastAccess,Warned,DeletedOn   |  Out-File -file $GuestHistoryLog -Append
 
 "`nActive Guests are:`n" + $ActiveGuestsTxt  |  Out-File -file $GuestHistoryLog -Append
+if ($InviterTxt -ne "") { 
+    "`nInvited Guests:`n" + $InviterTxt   |  Out-File -file $GuestHistoryLog -Append
+    }
 
 write-host "[End] Results in $GuestHistoryLog" -ForegroundColor Green
