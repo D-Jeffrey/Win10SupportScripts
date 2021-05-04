@@ -25,7 +25,7 @@ param
   [boolean]$TestOnly = $true
 )
 
-$Version = "2021.4.6"
+$Version = "2021.5.7"
 $GuestHistoryPurge = 90    #days 
 $GuestHistoryGrace = 30    #days 
 $AcceptInvite = 30         #days     
@@ -113,7 +113,7 @@ if ($ProductionRun) {
     
     }
      else {
-    Write-Host "... Test mode only.  Use -TestMode $$false  for production`n" -ForegroundColor Yellow
+    Write-Host "... Test mode only.  Use -TestMode `$false  for production`n" -ForegroundColor Yellow
     }
 # TODO
 # check date of state file to make sure it is not more than x days ago
@@ -206,25 +206,38 @@ foreach ($guestUser in $guestUsers)
     # TODO need to better detect and fix
     # get the Guest users most recent signins
 
-    try {
-        $guestUserSignIns = Get-AzureADAuditSignInLogs -Top 1 -Filter "createdDateTime ge $queryStartDateTimeFilter and UserID eq '$($guestUser.ObjectID)'" -ErrorAction SilentlyContinue
-        }
-    Catch {
-        Write-Progress "Stalled - Reading logs for Guest $DN" -PercentComplete ($i / $guestUsers.count*100)
-        Write-Verbose "Stalled reading AzureADAuditSignInLogs"
-    
-         # we will see if this slows the script enough that MS let's it continue
-        Start-Sleep 30
-        $guestUserSignIns = Get-AzureADAuditSignInLogs -Top 1 -Filter "createdDateTime ge $queryStartDateTimeFilter and UserID eq '$($guestUser.ObjectID)'" 
-        }
+    $Looking = $true
+    $DelayIt = 1
+    while ($Looking) {
+        try {
+            $guestUserSignIns = Get-AzureADAuditSignInLogs -Top 1 -Filter "createdDateTime ge $queryStartDateTimeFilter and UserID eq '$($guestUser.ObjectID)'" -ErrorAction SilentlyContinue
+            $Looking = $false
+            }
+        Catch {
+            Write-Progress ("Stalled - Reading logs for Guest $DN (" + $DelayIt + ")") -PercentComplete ($i / $guestUsers.count*100)
+            Write-Verbose "Stalled reading AzureADAuditSignInLogs"
 
+            if ($DelayIt -gt 10) { 
+                $Looking = $False
+                Write-Host ("Problem getting AuditSignInLogs for : " + $guestUsers.DisplayName + "(" +$guestUsers.Mail +")") -ForegroundColor DarkRed -BackgroundColor Yellow
+            } else {
+    
+                # we will see if this slows the script enough that MS let's it continue
+                Start-Sleep (40 * $DelayIt)
+                $DelayIt += 1
+            }
+        }
+    }
+    $memberOf = $guestUser | Get-AzureADUserMembership
+    $mDisplay = $memberOf.DisplayName
     if ($guestUserSignIns -eq $null) {
         # No longs in the last X days
         $oldMissingGuest= ($guestUser | select UserState, UserStateChangedOn) 
         #
         # Force all null to today (so we don't age them out too quickly)  very useful during FirstRun
         #
-        
+
+          
         if ($guestStateAll -ne $null -and ! $guestStateAll.ObjectID.Contains($guestUser.ObjectID)) {
            if (($oldMissingGuest.UserStateChangedOn) -eq $null) {
                $oldMissingGuest.UserStateChangedOn = $queryStartDateTimeFilter
@@ -242,6 +255,7 @@ foreach ($guestUser in $guestUsers)
                 LastAccess = $queryStartDateTimeFilter;
                 Warned = $oldMissingGuest.Warned;
                 DeletedOn = $null;
+                MemberOf = $mDisplay;
                 }
 
        
@@ -250,8 +264,9 @@ foreach ($guestUser in $guestUsers)
           
           Write-Verbose ("$DN was active " + $guestUserSignIns.CreatedDateTime)
           $MN = $guestUser.Mail
-          $ActiveGuestsTxt = $ActiveGuestsTxt + "`n$DN ($MN) was active " + ('{0:yyyy-MM-dd} {0:HH:mm}' -f $guestUserSignIns.CreatedDateTime)
+          $ActiveGuestsTxt = $ActiveGuestsTxt + "`n$DN ($MN) was active " + [DateTime]$guestUserSignIns.CreatedDateTime
           $ActiveGuest += $guestUser
+            
           $theOldGuest += [pscustomobject]@{ 
             ObjectID = $guestUser.ObjectID;
             userprincipalname = $guestUser.userprincipalname;
@@ -262,6 +277,8 @@ foreach ($guestUser in $guestUsers)
             LastAccess = $guestUserSignIns.CreatedDateTime;
             Warned = $false;         # If they are active then reset the Warned flag
             DeletedOn = $null;
+            MemberOf = $mDisplay;
+             
           }
       
      }
@@ -402,8 +419,8 @@ write-host ("Saving State for Next Run " + $GuestStateHistory) -ForegroundColor 
 #set the time back to when we started this.
 
 $setFile = Get-item -Path $GuestStateHistory
-$setFile.CreationTime = $StartingTime
-$setFile.LastWriteTime = $StartingTime
+$setFile.CreationTime = $setFile.LastWriteTime = $setFile.LastAccessTime= $StartingTime
+
 
 $oldCnt = $theOldGuest.count
 $warnCnt = ($GuestAll | where { $_.Warned -eq $true -and $_.DeletedOn -eq $null } ).ObjectID.count
@@ -412,21 +429,22 @@ $act30 = ($GuestAll  | where { (get-date $($_.LastAccess)) -gt $((get-date).addd
 
 Write-Host "`nSummary`n---------------------------------------" -ForegroundColor Yellow
 
-Write-Output ("Guests active since last run     : " + $ActiveGuest.count)
-Write-Output ("Guests active in last 28 days    : " + $Act30)
-Write-Output ("Pending older than $AcceptInvite days       : " + $PendingAcceptGuests.count)
-Write-Output ("Guest who are older than "  + $GuestHistoryPurge +" days : " + $oldCnt)
-Write-Output ("Guest who are warned             : " + $warnCnt)
-Write-Output ("Guest historically deleted       : " + $delCnt)
-Write-Output ("Total Guests                     : " + $guestUsers.count)
+$results =  (  "Guests active since last run     : " + $ActiveGuest.count)
+$results += ("`nGuests active in last 28 days    : " + $Act30)
+$results += ("`nPending older than $AcceptInvite days       : " + $PendingAcceptGuests.count)
+$results += ("`nGuest who are older than "  + $GuestHistoryPurge +" days : " + $oldCnt)
+$results += ("`nGuest who are warned             : " + $warnCnt)
+$results += ("`nGuest historically deleted       : " + $delCnt)
+$results += ("`nTotal Guests                     : " + $guestUsers.count)
 
+Write-Output $results
 $TN = $Tent.DisplayName
 if (!(Test-Path -Path $GuestHistoryLog)) {
-    "Report for $TN `n" | Out-File -file $GuestHistoryLog    
+    "Report for $TN `n" | Out-File -file $GuestHistoryLog -Append   
     }
 
-"`n** GuestHistory Run: " + (get-date) + "**" | Out-File -file $GuestHistoryLog -Append
-("Pending older than 30 days: " + $PendingAcceptGuests.count) | Out-File -file $GuestHistoryLog -Append
+"`n######## GuestHistory Run: " + (get-date) + "########" | Out-File -file $GuestHistoryLog -Append
+$lastRun + " `n" + $results | Out-File -file $GuestHistoryLog -Append
 $PendingAcceptGuests | Sort-Object -Property UserStateChangedOn   | Format-Table -Property Mail,CreationType,UserState,UserStateChangedOn  |  Out-File -file $GuestHistoryLog -Append
 ("Guest who are older than $GuestHistoryPurge days: " + $theOldGuest.count) |  Out-File -file $GuestHistoryLog -Append
 $theOldGuest | Sort-Object -Property UserStateChangedOn   | Format-Table -Property Mail,CreationType,UserState,UserStateChangedOn,LastAccess,Warned,DeletedOn   |  Out-File -file $GuestHistoryLog -Append
@@ -435,5 +453,7 @@ $theOldGuest | Sort-Object -Property UserStateChangedOn   | Format-Table -Proper
 if ($InviterTxt -ne "") { 
     "`nInvited Guests:`n" + $InviterTxt   |  Out-File -file $GuestHistoryLog -Append
     }
+
+"`n######## End ########" | Out-File -file $GuestHistoryLog -Append
 
 write-host "[End] Results in $GuestHistoryLog" -ForegroundColor Green
