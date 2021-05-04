@@ -29,7 +29,7 @@ $Version = "2021.5.7"
 $GuestHistoryPurge = 90    #days 
 $GuestHistoryGrace = 30    #days 
 $AcceptInvite = 30         #days     
-$GuestHistoryLog = "GuestHistory.Log"
+$GuestHistoryLog = "GuestHistory." + (get-date -F yyyy-MM-dd) +".Log"
 $hasAD = ((get-module -ListAvailable -name ActiveDirectory).count -gt 0)
 
 
@@ -183,7 +183,6 @@ write-verbose "Getting Active Guests "
 Write-Progress -Activity "Getting accounts" 
 
 
-# ....... this is the MONEY QUERY 
 
 
 $guestState30 = [pscustomobject]@() 
@@ -210,6 +209,8 @@ foreach ($guestUser in $guestUsers)
     $DelayIt = 1
     while ($Looking) {
         try {
+                   # ....... this is the MONEY QUERY ..............
+
             $guestUserSignIns = Get-AzureADAuditSignInLogs -Top 1 -Filter "createdDateTime ge $queryStartDateTimeFilter and UserID eq '$($guestUser.ObjectID)'" -ErrorAction SilentlyContinue
             $Looking = $false
             }
@@ -255,7 +256,7 @@ foreach ($guestUser in $guestUsers)
                 LastAccess = $queryStartDateTimeFilter;
                 Warned = $oldMissingGuest.Warned;
                 DeletedOn = $null;
-                MemberOf = $mDisplay;
+                MemberOf = @($mDisplay);
                 }
 
        
@@ -277,7 +278,7 @@ foreach ($guestUser in $guestUsers)
             LastAccess = $guestUserSignIns.CreatedDateTime;
             Warned = $false;         # If they are active then reset the Warned flag
             DeletedOn = $null;
-            MemberOf = $mDisplay;
+            MemberOf = @($mDisplay);
              
           }
       
@@ -440,11 +441,11 @@ $results += ("`nTotal Guests                     : " + $guestUsers.count)
 Write-Output $results
 $TN = $Tent.DisplayName
 if (!(Test-Path -Path $GuestHistoryLog)) {
-    "Report for $TN `n" | Out-File -file $GuestHistoryLog -Append   
+    "Report for $TN `n" | Out-File -file $GuestHistoryLog   
     }
 
 "`n######## GuestHistory Run: " + (get-date) + "########" | Out-File -file $GuestHistoryLog -Append
-$lastRun + " `n" + $results | Out-File -file $GuestHistoryLog -Append
+"Last Run: " + $lastRun + " `n" + $results +"`n###`n" | Out-File -file $GuestHistoryLog -Append
 $PendingAcceptGuests | Sort-Object -Property UserStateChangedOn   | Format-Table -Property Mail,CreationType,UserState,UserStateChangedOn  |  Out-File -file $GuestHistoryLog -Append
 ("Guest who are older than $GuestHistoryPurge days: " + $theOldGuest.count) |  Out-File -file $GuestHistoryLog -Append
 $theOldGuest | Sort-Object -Property UserStateChangedOn   | Format-Table -Property Mail,CreationType,UserState,UserStateChangedOn,LastAccess,Warned,DeletedOn   |  Out-File -file $GuestHistoryLog -Append
