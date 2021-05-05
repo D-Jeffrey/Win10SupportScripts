@@ -25,7 +25,7 @@ param
   [boolean]$TestOnly = $true
 )
 
-$Version = "2021.5.7"
+$Version = "2021.5.8"
 $GuestHistoryPurge = 90    #days 
 $GuestHistoryGrace = 30    #days 
 $AcceptInvite = 30         #days     
@@ -230,7 +230,7 @@ foreach ($guestUser in $guestUsers)
         }
     }
     $memberOf = $guestUser | Get-AzureADUserMembership
-    $mDisplay = $memberOf.DisplayName
+    $mDisplay = $memberOf.DisplayName 
     if ($guestUserSignIns -eq $null) {
         # No longs in the last X days
         $oldMissingGuest= ($guestUser | select UserState, UserStateChangedOn) 
@@ -244,6 +244,7 @@ foreach ($guestUser in $guestUsers)
                $oldMissingGuest.UserStateChangedOn = $queryStartDateTimeFilter
                $oldMissingGuest.UserState = $oldMissingGuest.UserState + "/ForcedChangedOn"
                $oldMissingGuest.Warned = $false
+               $oldMissingGuest.MemberOf = $mDisplay;
                }
            $oldMissingGuest.UserState = $oldMissingGuest.UserState + "/ForcedLastAccess"
            $theOldGuest += [pscustomobject]@{
@@ -256,7 +257,7 @@ foreach ($guestUser in $guestUsers)
                 LastAccess = $queryStartDateTimeFilter;
                 Warned = $oldMissingGuest.Warned;
                 DeletedOn = $null;
-                MemberOf = @($mDisplay);
+                MemberOf = $mDisplay;
                 }
 
        
@@ -278,7 +279,7 @@ foreach ($guestUser in $guestUsers)
             LastAccess = $guestUserSignIns.CreatedDateTime;
             Warned = $false;         # If they are active then reset the Warned flag
             DeletedOn = $null;
-            MemberOf = @($mDisplay);
+            MemberOf = $mDisplay;
              
           }
       
@@ -415,7 +416,7 @@ write-host ("Saving State for Next Run " + $GuestStateHistory) -ForegroundColor 
 
 #  -Compress 
 
- $GuestAll | ConvertTo-Json -Depth 1 | Set-Content -LiteralPath $GuestStateHistory
+ $GuestAll | ConvertTo-Json -Depth 2 | Set-Content -LiteralPath $GuestStateHistory
 
 #set the time back to when we started this.
 
@@ -441,10 +442,10 @@ $results += ("`nTotal Guests                     : " + $guestUsers.count)
 Write-Output $results
 $TN = $Tent.DisplayName
 if (!(Test-Path -Path $GuestHistoryLog)) {
-    "Report for $TN `n" | Out-File -file $GuestHistoryLog   
+    "Report for $TN `n" | Out-File -file $GuestHistoryLog 
     }
 
-"`n######## GuestHistory Run: " + (get-date) + "########" | Out-File -file $GuestHistoryLog -Append
+"`n######## GuestHistory Run: " + (get-date) + " ########" | Out-File -file $GuestHistoryLog -Append
 "Last Run: " + $lastRun + " `n" + $results +"`n###`n" | Out-File -file $GuestHistoryLog -Append
 $PendingAcceptGuests | Sort-Object -Property UserStateChangedOn   | Format-Table -Property Mail,CreationType,UserState,UserStateChangedOn  |  Out-File -file $GuestHistoryLog -Append
 ("Guest who are older than $GuestHistoryPurge days: " + $theOldGuest.count) |  Out-File -file $GuestHistoryLog -Append
