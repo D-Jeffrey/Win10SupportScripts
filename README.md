@@ -48,7 +48,18 @@ also remove accountw which have not accepting their invition and are older then 
     TODO Send E-mail notifications to users when we have removed them from the system
     TODO Send Grace period Warning messages that their account will be deleted
     TODO Send Grace period warning summary alerts to delegates for invited people
- 
+
+Sample results...
+    Summary
+    ---------------------------------------
+    Guests active since last run     : 87
+    Guests active in last 28 days    : 119
+    Pending older than 30 days       : 0
+    Guest who are older than 90 days : 0
+    Guest who are warned             : 0
+    Guest historically deleted       : 0
+    Total Guests                     : 396
+    [End] Results in GuestHistory.2021-05-17.Log
 
 ## __PSTMoveFromOneDrive.ps1__
  Designed to move PST files outside of OneDrive directory space at logon time.
