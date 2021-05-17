@@ -41,7 +41,8 @@ DisplayName, ManagedByDetails, Notes, GroupMemberCount, GroupExternalMemberCount
 ## __GuestHistory.ps1__
  WIP - Purge old Guest accounts by running this perodically to get the list of accounts, keep it for future runs, then after it pasts the cutoff age, remove the acount
 also remove accountw which have not accepting their invition and are older then 30 days credit 
- to https://github.com/chadmcox/Azure_Active_Directory_Scripts/tree/master/Guests
+ to https://github.com/chadmcox/Azure_Active_Directory_Scripts/tree/master/Guests and example of how to run something like this in Azure Automation 
+ https://devblogs.microsoft.com/premier-developer/azure-active-directory-automating-guest-user-management/
 
     Check age of State file so if there is more than 30 days between runs, then warn about that
     TODO Add a ClearHistory Switch to Reset state
@@ -50,6 +51,7 @@ also remove accountw which have not accepting their invition and are older then 
     TODO Send Grace period warning summary alerts to delegates for invited people
 
 Sample results...
+
     Summary
     ---------------------------------------
     Guests active since last run     : 87
