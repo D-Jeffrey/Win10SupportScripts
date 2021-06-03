@@ -1,4 +1,5 @@
-#Requires -Modules AzureADPreview, Exch-Rest
+#Requires -Modules AzureADPreview
+# , Exch-Rest
 #
 # WIP - Purge old Guest accounts by running this perodically to get the list of accounts, keep it for future runs, then after it pasts the cutoffage, remove the acount
 # also remove accountw which have not accepting their invition and are older then 30 days credit 
@@ -16,6 +17,8 @@
 # D-Jeffrey on github.com
 #
 # can use AD if module is present
+#    -- if you can overcome module issues with 
+#    import-Module  AzureADPreview  -Force
 #
 param
 (
