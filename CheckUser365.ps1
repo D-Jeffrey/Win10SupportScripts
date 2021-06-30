@@ -117,7 +117,7 @@ $selectSkus = @(
 # CONFIGURATIONHERE
 
 $ShowSpecialGroups = @( "App_IPP_Users", "NoPSTGrowth", "FAB-GuestUsers" )
-  
+$credObject = $null  
 
 
 $scriptversion = "v.21.04.127"
@@ -275,7 +275,7 @@ function doSummary {
   
 
   # we have to look this one up because it is not cached
-  Write-Output ("Users in Azure License E5     " + $E5GroupList.count + " vs " + (Get-ADGroup "Azure_License_NonMBaseE5" | Get-ADGroupMember).count  + " Nonbase E5")
+  Write-Output ("Users in Azure License E5     " + $E5GroupList.count)
 
   # Pull information about Office 365 Groups
   if ($IncludeExchange.IsPresent) {
@@ -386,11 +386,31 @@ if ($TeamCount.IsPresent -or $IncludeTeams.IsPresent) {
       Remove-PSSession -InstanceId $id
 #    #  }
       
-     }
-  if ((Get-PSSession | Where-Object Name -like "SfBPowerShellSession*").count -eq 0)  {
-    Import-Module MicrosoftTeams
-    $sfbSession = New-CsOnlineSession -Credential $credObject
-    Import-PSSession $sfbSession -AllowClobber | Out-Null
+    }
+    if ((Get-PSSession | Where-Object Name -like "SfBPowerShellSession*").count -eq 0)  {
+    Import-Module  MicrosoftTeams
+    if ((get-command New-CsOnlineSession*).count -gt 0) {
+    
+        if ($credObject -ne $null ) {
+            $sfbSession = New-CsOnlineSession -Credential $credObject
+            }
+        else {
+            $sfbSession = New-CsOnlineSession
+            }
+        
+        # ERROR OLD CODE ???
+        Import-PSSession $sfbSession -AllowClobber | Out-Null
+        }
+        
+    else {
+        if ($credObject -ne $null) {
+            Connect-MicrosoftTeams -Credential $credObject
+            }
+        else {
+            Connect-MicrosoftTeams | Out-Null
+            }
+            }
+
   }
 
 }
@@ -552,12 +572,13 @@ if ($ShowAllColumns.IsPresent) {
                 }
             }
         }
+        $i = 1
     $GMR = $AMR
     $GMR | ForEach-Object { 
         $RName = $_.Name
         Write-Progress -Activity "Loading Azure Admin Roles" -CurrentOperation  ($i.ToString() + "- " +$Rname) -PercentComplete ($i * 100 / ($GMR.count ))
         $i++
-        Get-AzureADDirectoryRoleMember -bjectId $_.ObjectID  | forEach-object {
+        Get-AzureADDirectoryRoleMember -objectId $_.ObjectID  | forEach-object {
           $RolesList += [pscustomobject]@{ 
                 Key = -join ($_.ObjectID, $_.UserPrincipalName) ;
                 Name = $RName ;
@@ -783,8 +804,10 @@ $who | ForEach-Object {
   $ExODetails = ""
   $UserType = ""
   $CreateType = ""
+  $MethodTypes = $null
   $MFAStatus = $_.StrongAuthenticationRequirements.State
-  $MethodTypes = $_.StrongAuthenticationMethods
+  $MethodTypes = $_.StrongAuthenticationMethods.MethodType
+  $MFAApps = $_.StrongAuthenticationPhoneAppDetails.AuthenticationType
   $E5Licensed = ""
   $SpecialGroups = ""
   $ExOStatus = "NC"
@@ -830,7 +853,7 @@ $who | ForEach-Object {
 
 
   #Filter result based on License status 
-  if ((($LicensedUserOnly.IsPresent) -and ($_.IsLicensed -eq $False)) -and -not $ShowAllColumns.IsPresent)
+  if ((($LicensedUserOnly.IsPresent) -and ($thisUser.IsLicensed -eq $False)) -and -not $ShowAllColumns.IsPresent)
   {
 
     return
@@ -872,7 +895,7 @@ $who | ForEach-Object {
   # checking this user if the not disabled, has MFA or if ListAll
 
   #Check for MFA enabled user 
-  if ((($MethodTypes -ne $Null) -or ($MFAStatus -ne $Null) -and (-not ($DisabledOnly.IsPresent))) -or $ShowAllColumns.IsPresent)
+  if (((($MethodTypes -ne $Null) -or ($MFAStatus -ne $Null) -or ($MFAApps -ne $null)) -and (-not ($DisabledOnly.IsPresent))) -or $ShowAllColumns.IsPresent)
   {
     #Check for Conditional Access 
     if (($MethodTypes -eq $null) -and ($MFAStatus -eq $null))
@@ -881,12 +904,12 @@ $who | ForEach-Object {
     } else {
       if ($MFAStatus -eq $null) {
 
-        $MFAStatus = 'Enabled via Conditional Access'
+        $MFAStatus = 'Enabled via CA'
       }
     }
 
     #Filter result based on EnforcedOnly filter 
-    if ((([string]$MFAStatus -eq "Enabled") -or ([string]$MFAStatus -eq "Enabled via Conditional Access")) -and ($EnforcedOnly.IsPresent))
+    if ((([string]$MFAStatus -eq "Enabled") -or ([string]$MFAStatus -eq "Enabled via CA")) -and ($EnforcedOnly.IsPresent))
     {
       return
     }
@@ -904,21 +927,29 @@ $who | ForEach-Object {
     }
 
     $Methods = ""
-    $MethodTypes = ""
-    $MethodTypes = $_.StrongAuthenticationMethods.MethodType
-    $DefaultMFAMethod = ($_.StrongAuthenticationMethods | Where-Object { $_.IsDefault -eq "True" }).MethodType
+    
+    $DefaultMFAMethod = ($thisUser.StrongAuthenticationMethods | Where-Object { $_.IsDefault -eq "True" }).MethodType
     $MFAPhone = $_.StrongAuthenticationUserDetails.PhoneNumber
+   
     if ($MFAPhone -like "+1*") {
       $MFAPhone = ($MFAPhone.Substring(1,5)) + "-" + ($MFAPhone.Substring(6,1)) + "xx-xx" + ($MFAPhone.Substring($MFAPhone.Length - 2))
     }
-    $MFAEmail = $_.StrongAuthenticationUserDetails.Email
+    $MFAEmail = $thisUser.StrongAuthenticationUserDetails.Email
+    
+    
+    if ($MethodTypes -eq $null -or $MethodTypes.count -eq 0) {
+        if ($MFAApps -ne $null) {
+        
+            $MethodTypes = $MFAApps 
+            }
+        }
 
+    
     if ($MFAPhone -eq $Null)
     { $MFAPhone = "-" }
     if ($MFAEmail -eq $Null)
     { $MFAEmail = "-" }
-
-
+    
     #  $findupn = -join ('userprincipalName -like "', $upn, '"') 
 
     # $lUPN
