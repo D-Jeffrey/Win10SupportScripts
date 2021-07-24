@@ -63,6 +63,19 @@ Sample results...
     Total Guests                     : 396
     [End] Results in GuestHistory.2021-05-17.Log
 
+## __RemoveUnneededPrinters.ps1__
+ This is to used to remove the not need built in printer queues in Windows 10 
+ 
+I push this using Endpoint management to all the Windows 10 desktop to remove the built-in printers such as Microsoft XPS Document Writer
+
+    Script settings
+    
+    PowerShell script                                  RemoveUnneededPrinters.ps1
+    Run this script using the logged on credentials    Yes
+    Enforce script signature check                     No
+    Run script in 64 bit PowerShell Host               Yes
+
+
 ## __PSTMoveFromOneDrive.ps1__
  Designed to move PST files outside of OneDrive directory space at logon time.
  
