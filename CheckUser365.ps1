@@ -142,6 +142,19 @@ $ExportCSV = ".\DisabledUserReport_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` t
 $ExportCSVReport = ".\EnabledUserReport_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` tt).ToString()).csv"
 $ExportCSVTeams = ".\Teams_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` tt).ToString()).csv"
 
+
+function TestSwitch {
+param ($thisSwitch)
+    
+    if  ($thisSwitch.isPresent) {
+        $tsps = $MyInvocation.Line.IndexOf('TestSwitch(') + "TestSwitch(".Length + 1
+        $varName = $MyInvocation.Line.Substring($tsps, $MyInvocation.Line.IndexOf(')') -$tsps)
+        " -" + ($varName)
+    } else {
+        ""
+        }    
+}
+
 if ($MyDefault.IsPresent) {
     $IncludeSummary = $true
     $IncludeExchange = $true
@@ -202,20 +215,7 @@ Function WriteError
        }
 }
 
-function TestSwitch {
-param ($thisSwitch)
-    
-    if  ($thisSwitch.isPresent) {
-        $tsps = $MyInvocation.Line.IndexOf('TestSwitch(') + "TestSwitch(".Length + 1
-        $varName = $MyInvocation.Line.Substring($tsps, $MyInvocation.Line.IndexOf(')') -$tsps)
-        
-        
-        " -" + ($varName)
-    } else {
-        ""
-        }
-    
-}
+
 
 Function Get-RecursiveAzureAdGroupMemberUsers{
 [cmdletbinding()]
