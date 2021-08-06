@@ -78,7 +78,6 @@ param
   [string]$UserName,
   [string]$Password,
   [switch]$IncludeTeams,
-  [switch]$IncludeGroups,              # Include Office 365 Groups
   [switch]$FlushCache,                # to clear all the program generated caches 
   [int32]$TopX = -1,
   [switch]$TeamCount
@@ -87,14 +86,8 @@ param
 # Extra Licenses to look for  
 # CONFIGURATIONHERE
 
-if ($MyDefault.IsPresent) {
-    $IncludeSummary = $true
-    $IncludeExchange = $true
-    $IncludeTeams = $true
-    $ShowMFA = $true
-    $ShowAllColumns = $true
-    }
 
+ 
 $selectSkus = @(
   [pscustomobject]@{ Code = "MCOMEETADV"; Name = "Microsoft365AudioConferencing" }
   [pscustomobject]@{ Code = "MCOEV"; Name = "Microsoft365PhoneSystem" }
@@ -149,6 +142,30 @@ $ExportCSV = ".\DisabledUserReport_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` t
 $ExportCSVReport = ".\EnabledUserReport_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` tt).ToString()).csv"
 $ExportCSVTeams = ".\Teams_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` tt).ToString()).csv"
 
+if ($MyDefault.IsPresent) {
+    $IncludeSummary = $true
+    $IncludeExchange = $true
+    $IncludeTeams = $true
+    $ShowMFA = $true
+    $ShowAllColumns = $true
+ 
+    $CmdLineOpts = ""
+    $CmdLineOpts += TestSwitch($IncludeSummary) 
+    $CmdLineOpts += TestSwitch($Summary)
+    $CmdLineOpts += TestSwitch($IncludeExchange)
+    $CmdLineOpts += TestSwitch($IncludeTeams)
+    $CmdLineOpts += TestSwitch($ShowMFA)
+    $CmdLineOpts += TestSwitch($ShowAllColumns)
+    $CmdLineOpts += TestSwitch($DisabledOnly)
+    $CmdLineOpts += TestSwitch($EnabledOnly)
+    $CmdLineOpts += TestSwitch($EnforcedOnly)  
+    $CmdLineOpts += TestSwitch($ShowEmpNum)
+    $CmdLineOpts += TestSwitch($AdminOnly)
+    $CmdLineOpts += TestSwitch($ConditionalAccessOnly)
+    $CmdLineOpts += TestSwitch($LicensedUserOnly)
+    $CmdLineOpts += TestSwitch($FlushCache)
+}
+
 #
 # ----------------- Functions
 #
@@ -183,6 +200,21 @@ Function WriteError
     } else {
        Write-Host (get-date -Format "dd-MMM-yyyy hh:mm:ss tt") ": ERROR: $Message" -ForegroundColor RED
        }
+}
+
+function TestSwitch {
+param ($thisSwitch)
+    
+    if  ($thisSwitch.isPresent) {
+        $tsps = $MyInvocation.Line.IndexOf('TestSwitch(') + "TestSwitch(".Length + 1
+        $varName = $MyInvocation.Line.Substring($tsps, $MyInvocation.Line.IndexOf(')') -$tsps)
+        
+        
+        " -" + ($varName)
+    } else {
+        ""
+        }
+    
 }
 
 Function Get-RecursiveAzureAdGroupMemberUsers{
@@ -342,6 +374,12 @@ if ($Modules.count -eq 0)
 
 Write-Host -BackgroundColor DarkGreen ("CheckUser365 : " + $scriptversion)
 Write-Progress -Activity ("CheckUser365 - " + $scriptversion + "`n... Connecting... `n")
+
+if ($MyDefault.IsPresent) {
+
+    Write-Host "Using settings of $CmdLineOpts"
+    }
+
 #Storing credential in script for scheduling purpose/ Passing credential as parameter  
 if (($UserName -ne "") -and ($Password -ne ""))
 {
@@ -526,19 +564,7 @@ if (UseCache($GrpCache1, $false)) {
 
 
  
-if ($IncludeGroups.IsPresent) {
-if (UseCache($OGrpCache, $false)) {
-  Write-Progress -Activity "Loading Cached Office Group List"
-  $OfficeGroupList = (Get-Content -Raw -LiteralPath $OGrpCache) | ConvertFrom-Json
-  
 
-} else {
-
-  Write-Progress -Activity "Loading OfficGroup  List"
-  $OfficeGroupList = Get-ADGroup $OGrpName | Get-ADGroupMember | Select-Object SID
-
-}
-}
 
 
 if ($ShowAllColumns.IsPresent) {
