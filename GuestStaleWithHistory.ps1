@@ -25,17 +25,19 @@ param
   [Parameter(Mandatory = $false)]
   [switch]$FirstRun,                    # This must be used if this is the first time
   [switch]$ForceBack,                    # assume that something was missed and run the process looking back 29 days instead of just the last time it was run
+  [switch]$QuickCheck,                       # Using the state of the last run, run a quick report which does not read the Sign-In Logs, it just used the state from before.  QuickCheck Disabled the Production Run.
   [switch]$ResetConnection,             # Re-connect to services
-  [boolean]$TestOnly = $true
+  [boolean]$TestOnly = $true,
+  [boolean]$SendMail = $false
 )
 
 #.......    Grace - Warning      (E-mail warning)
 #..........................Grace (Delete account)
 
-$Version = "2021.5.9"
-$GuestGrace = 90     #days 
+$Version = "2021.7.12"
+$GuestGrace = 180     #days 
 $GuestWarning = 14   #days 
-$AcceptInvite = 30          #days     
+$AcceptInvite = 30          #days    #  (Max limit of design is 30 days)
 $GuestInformGroupOwner = $false      # NOT BUILT
 
 
@@ -47,25 +49,20 @@ $ProductionRun = !$TestOnly
 # Special words
 # %TENANT%, %DISPLAYNAME%, %GRACEDATE%, %INACTIVITY%, %UPNMAIL%, %GROUPNAME%, %TODAY%
 
-$MsgBody = "<!DOCTYPE html>
-<html>
-<head>
-<meta charset='utf-8'>
-<title>Notification of Pending Removal of Access</title>
-</head>
-<body>
+$MsgBody = "Notification of Pending Removal of Access
 Attention %DISPLAYNAME%,
 
-Your access to the %TENANT% Azure/Office 365 services will be removed due to inactivity, effective %GRACEDATE%.  You have not used our systems in the last %INACTIVITY% days.
+Your access to the %TENANT% Azure/Office 365 services will be removed due to inactivity, effective %GRACEDATE%.  You have not used our systems in at least the last %INACTIVITY% days.
 
-If you access your services at %TENANT% before %GRACEDATE%, your account will stay active, otherwise it will be permanently removed.
+If you access your services at %TENANT% before %GRACEDATE%, your account will stay active, otherwise it will be permanently removed.  These services could Teams, SharePoint, Project Management or others Microsoft Office 365 Services shared with you. `
+If you no longer require access to %TENANT%, then please disregard this e-mail.
 
 Account information
    Guest Account: %UPNMAIL%
    Associated Services: %GROUPNAMES% 
-</body>
-</html>
-"
+
+Do not reply to this message, the mailbox is unmonitored.
+%TENANT% IT Services"
 
 
 # --------------- end of Confug
@@ -74,8 +71,126 @@ Account information
 #
 #
 
+Function GetAccessToken {
+    param (
+        [Parameter(Position=0, Mandatory=$false)]
+        [string] $ClientId,
+        [Parameter(Position=1, Mandatory=$false)]
+        [string] $RedirectUri,
+        [Parameter(Position=2, Mandatory=$false)] 
+        [string] $Office365Username, 
+        [Parameter(Position=3, Mandatory=$false)]
+        [string] $Office365Password,    
+        [Parameter(Position=4, Mandatory=$false)]
+        [boolean] $ExchRest = $false    
+      )
+    # Set ADAL (Microsoft.IdentityModel.Clients.ActiveDirectory.dll) assembly path from Azure AD module location
+    try {
+    $AADModule = Import-Module -Name AzureAD -ErrorAction Stop -PassThru
+    }
+    catch {
+    throw 'The AzureAD PowerShell module not installed'
+    }
+    $adalPath = Join-Path $AADModule.ModuleBase "Microsoft.IdentityModel.Clients.ActiveDirectory.dll"
+    $adalformPath = Join-Path $AADModule.ModuleBase "Microsoft.IdentityModel.Clients.ActiveDirectory.Platform.dll"
+    [System.Reflection.Assembly]::LoadFrom($adalPath) | Out-Null
+    [System.Reflection.Assembly]::LoadFrom($adalformPath) | Out-Null  
+ 
+    if ($ExchRest) {
+    # Use Exch-Rest client id of for sending mail. 
+    $ClientId = "1d236c67-7e0b-42bc-88fd-d0b70a3df50a"
+    $RedirectUri = "urn:ietf:wg:oauth:2.0:oob"
+    }
+    # If client not proivded, we are setting the id of an Azure AD app which is pre-registered by Microsoft
+    if([string]::IsNullOrEmpty($ClientId) -eq $true)
+    {    
+    # This is a well known and pre-registered Azure AD client id of PowerShell client. 
+    $ClientId = "1950a258-227b-4e31-a9cf-717495945fc2"
+    $RedirectUri = "urn:ietf:wg:oauth:2.0:oob"
+    }
+    elseIf ([string]::IsNullOrEmpty($RedirectUri) -eq $true)
+    {
+      throw "The RedirectUri not provided"
+    }
+    $resourceURI = "https://graph.microsoft.com"
+    $authority = "https://login.microsoftonline.com/common"
+    $authContext = New-Object "Microsoft.IdentityModel.Clients.ActiveDirectory.AuthenticationContext" -ArgumentList $authority
+      
+    #Acquire token without user interaction
+    if (([string]::IsNullOrEmpty($Office365Username) -eq $false) -and ([string]::IsNullOrEmpty($Office365Password) -eq $false))
+    {
+    $SecurePassword = ConvertTo-SecureString -AsPlainText $Office365Password -Force
+    #Build Azure AD credentials object
+    $AADCredential = New-Object "Microsoft.IdentityModel.Clients.ActiveDirectory.UserPasswordCredential" -ArgumentList $Office365Username,$SecurePassword
+    # Get token without login prompts.
+    $authResult = [Microsoft.IdentityModel.Clients.ActiveDirectory.AuthenticationContextIntegratedAuthExtensions]::AcquireTokenAsync($authContext, $resourceURI,$ClientId, $AADCredential)
+    $accessToken = $authResult.Result.AccessToken
+    }
+    else
+    {
+    # Get token by prompting login window.
+    $platformParameters = New-Object "Microsoft.IdentityModel.Clients.ActiveDirectory.PlatformParameters" -ArgumentList "Always"
+    $authResult = $authContext.AcquireTokenAsync($resourceURI, $ClientID, $RedirectUri, $platformParameters)
+    $accessToken = $authResult.Result.AccessToken
+    }
+ 
+    return $accessToken
+}
+
+
+
+
+function SendMyMessage {
+ param (
+        [Parameter(Position=0, Mandatory=$true)]
+        [string] $token,
+        [Parameter(Position=1, Mandatory=$true)]
+        [string] $subject,
+        [Parameter(Position=2, Mandatory=$true)] 
+        [string] $body
+        
+      )
+
+
+$Params = @{
+  "URI"         = 'https://graph.microsoft.com/v1.0/me/sendMail'
+  "Headers"     = @{
+    "Authorization" = ("Bearer {0}" -F $Token)
+  }
+  "Method"      = "POST"
+  "ContentType" = 'application/json'
+  "Body" = (@{
+    "message" = @{
+      "subject" = 'This is a test message.'
+      "body"    = @{
+        "contentType" = 'Text'
+        "content"     = 'This is a test email'
+      }
+      "toRecipients" = @(
+        @{
+          "emailAddress" = @{
+            "address" = 'darrenjeffrey@hotmail.com'
+          }
+        }
+      )
+    }
+  }) | ConvertTo-JSON -Depth 10
+}
+
+Invoke-RestMethod @Params
+
+
+}
+
+
+
+Import-Module AzureADPreview -Force
+
 $hasAD = ((get-module -ListAvailable -name ActiveDirectory).count -gt 0)    # Used to Auto-logon
 
+if ($QuickCheck.IsPresent) {
+    $ProductionRun = $false
+    }
 
 if ($ResetConnection.IsPresent) {
         Disconnect-AzureAD  -ErrorAction SilentlyContinue
@@ -99,11 +214,16 @@ if ($hasAD) {
   }
 
 
+##### INCOMPLETE
+# $Token = GetAccessToken -ExchRest $true
+#
+
 
   
 # Use the Tenant ID to avoid issues with multi-tenant testing
 $Tent = (Get-AzureADTenantDetail)
-$GuestStateHistory = $env:TEMP  + "\GuestStateHistory." + $Tent.ObjectID + ".state"
+$GuestStateHistoryPath = $env:APPDATA  + "\GuestState"
+$GuestStateHistory = $GuestStateHistoryPath + "\GuestStateHistory." + $Tent.ObjectID + ".state"
 
 Write-Verbose ("Working on Tenant " + $Tent.DisplayName + " " + $Tent.ObjectID)
 $StartingTime = (get-date) 
@@ -114,8 +234,18 @@ if ($FirstRun.IsPresent -and (test-Path -LiteralPath $GuestStateHistory)) {
     Write-host "This Script has been run before, this is not the firstRun"
     Break
     }
+
+$ReadyToGo = (Get-Item -LiteralPath $GuestStateHistory -ErrorAction SilentlyContinue).LastWriteTime -gt (Get-Date).AddDays(-29)
+if (-not $ReadyToGo) { 
+    # override that fact that this is too old
+    if ($ForceBack.IsPresent) {
+        if ( test-Path -LiteralPath $GuestStateHistory) {
+            $ReadyToGo = $true
+            }
+        }
+    }
 # Is the file existing or current enough
-if ((Get-Item -LiteralPath $GuestStateHistory -ErrorAction SilentlyContinue).LastWriteTime -gt (Get-Date).AddDays(-29)) {
+if ($ReadyToGo ) {
     write-Progress "Loading State..."
     $guestStateAll = (Get-Content -Raw -LiteralPath $GuestStateHistory) | ConvertFrom-Json
     write-Progress ("Loaded: " + ($guestStateAll).Count)
@@ -126,10 +256,14 @@ if ((Get-Item -LiteralPath $GuestStateHistory -ErrorAction SilentlyContinue).Las
         $guestStateAll =  [pscustomobject]@()
         $lastRun = (Get-date).AddDays(-29)
         $LastRunTxt = "NEVER run before"
+        if (-not (Test-Path -LiteralPath $GuestStateHistoryPath)) {
+            New-Item -Path $GuestStateHistoryPath -ItemType directory| Out-Null
+        }
     } else {
     Write-Host "`
    Warning - running without a previous Guest State History, only continue if this is the first time you have started this process`
-    Or the history may be more than 30 days old, which means you may have lost records                                            `
+    Or the history may be more than 30 days old, which means you may have lost records (Using -ForceBack to override)
+       History file: $GuestStateHistory                                        `
                                                                                                                                   `
   If this is really the first run this use "  -ForegroundColor Red -BackgroundColor Yellow -NoNewline
      Write-Host " -FirstRun " -ForegroundColor Green -BackgroundColor DarkGreen
@@ -162,6 +296,9 @@ if ($ProductionRun) {
 Write-Host "# Reviewing Guests for : " $Tent.DisplayName  " using " $Version
 Write-Host "============================================"
 
+if ($QuickCheck.ispresent) {
+    Write-host ("   Quick Check Only" )  -ForegroundColor Green
+    }
 
 Write-host $lastRunTxt
 Write-verbose ("GuestInvite = $GuestInvite  (Non accept Invite = delete) for " + (get-date).adddays(-$AcceptInvite))
@@ -172,28 +309,35 @@ Write-verbose ("GuestGrace    = $GuestGrace = (Delete) for " + (get-date).addday
 $lastRun = $lastRun.AddHours(-1)  # Set the clock back 1 hour just in case
 $queryStartDateTimeFilter = '{0:yyyy-MM-dd}T{0:HH:mm:sszzz}' -f $lastRun.AddHours(-1)
 
+
+$InviterTxt = ""
+$warnedCnt = 0
+
+
  # Check to see if they fail to run AD Audit
 
- $FailedAudit = $false
- try { $lastAudit = Get-AzureADAuditSignInLogs -Top 1 -ErrorAction Stop 
-    } catch {
-    $FailedAudit = $true
-    }
-if ($FailedAudit) {
-    # check again
-    Start-Sleep 5
-    try { $lastAudit = Get-AzureADAuditSignInLogs -Top 1 -ErrorAction Stop 
-    } catch {
-        Write-Host "It appears you do not have SignInLogs access - STOPPING" -ForegroundColor Red -BackgroundColor Yellow
-        break 
+if (-not $QuickCheck.ispresent) { 
+
+     $FailedAudit = $false
+     try { $lastAudit = Get-AzureADAuditSignInLogs -Top 1 -ErrorAction Stop 
+        } catch {
+        $FailedAudit = $true
+        }
+    if ($FailedAudit) {
+        # check again
+        Start-Sleep 5
+        try { $lastAudit = Get-AzureADAuditSignInLogs -Top 1 -ErrorAction Stop 
+        } catch {
+            Write-Host "It appears you do not have SignInLogs access - STOPPING" -ForegroundColor Red -BackgroundColor Yellow
+            break 
+            }
         }
     }
-
 Write-Progress -Activity "Getting Old Expire Invite Guest" 
  #Delete guest that are pending acceptance and disabled for longer than $AcceptInvite days
   write-verbose "Getting accounts to Delete because they have not accepted their invite in $AcceptInvite days" 
   $PendingAcceptGuests = Get-AzureADUser -Filter "userType eq 'Guest'" -all $true -PipelineVariable guest | `
-  where {($_.userstate -eq 'PendingAcceptance') -and ((get-date $($_.UserStateChangedOn)) -lt $((get-date).adddays(-$AcceptInvite))) -and $_.accountenabled -eq $false} 
+  where {($_.userstate -eq 'PendingAcceptance') -and ([datetime](get-date $($_.UserStateChangedOn)) -lt $((get-date).adddays(-$AcceptInvite)))} 
    
 
 
@@ -204,13 +348,15 @@ Write-Progress -Activity "Getting Old Expire Invite Guest"
  
 
 $TG = $guestUsers.count
+$guestState30 = [pscustomobject]@() 
+
+
+
 write-verbose "Getting Active Guests "
 Write-Progress -Activity "Getting accounts" 
 
+if (-not $QuickCheck.ispresent) {   ###########################
 
-
-
-$guestState30 = [pscustomobject]@() 
 
 Write-Verbose "Reading Guest's logins"
 
@@ -224,8 +370,14 @@ foreach ($guestUser in $guestUsers)
 {
     $DN = $guestUser.DisplayName
     $ag = $ActiveGuest.count
+    
+    if ($guestUser.Mail -eq $Null) {
+        $M = $guestUser.Mail
+        } else {
+        $M = $guestUser.OtherMails 
+        } 
     Write-Progress "Reading logs for Guest: $DN  ($i of $TG)" -PercentComplete ($i / $guestUsers.count*100) -Status "Active Guests: $ag"
-    Write-Verbose ("Reading: $DN (" +   $guestUser.Mail + ")")
+    Write-Verbose ("Reading: $DN (" +   $M + ")")
     # This can trigger errors "Message: This request is throttled."
     # TODO need to better detect and fix
     # get the Guest users most recent signins
@@ -254,28 +406,31 @@ foreach ($guestUser in $guestUsers)
             }
         }
     }
-    $memberOf = $guestUser | Get-AzureADUserMembership
-    $mDisplay = $memberOf.DisplayName 
+    # TODO Error checking for no membership
+    
     if ($guestUserSignIns -eq $null) {
+        $memberOf = $guestUser | Get-AzureADUserMembership
+        $mDisplay = $memberOf.DisplayName
         # No longs in the last X days
         $oldMissingGuest= ($guestUser | select UserState, UserStateChangedOn) 
         #
         # Force all null to today (so we don't age them out too quickly)  very useful during FirstRun
         #
-
-          
+    
         if ($guestStateAll -ne $null -and ! $guestStateAll.ObjectID.Contains($guestUser.ObjectID)) {
            if (($oldMissingGuest.UserStateChangedOn) -eq $null) {
                $oldMissingGuest.UserStateChangedOn = $queryStartDateTimeFilter
                $oldMissingGuest.UserState = $oldMissingGuest.UserState + "/ForcedChangedOn"
                $oldMissingGuest.Warned = $false
-               $oldMissingGuest.MemberOf = $mDisplay;
+
                }
            $oldMissingGuest.UserState = $oldMissingGuest.UserState + "/ForcedLastAccess"
+       
+                
            $theOldGuest += [pscustomobject]@{
                 ObjectID = $guestUser.ObjectID;
                 userprincipalname = $guestUser.userprincipalname;
-                Mail = $guestUser.Mail;
+                Mail = $M;
                 CreationType = $guestUser.CreationType;
                 UserState = $oldMissingGuest.UserState;
                 UserStateChangedOn = $oldMissingGuest.UserStateChangedOn;
@@ -283,6 +438,7 @@ foreach ($guestUser in $guestUsers)
                 Warned = $oldMissingGuest.Warned;
                 DeletedOn = $null;
                 MemberOf = $mDisplay;
+                
                 }
 
        
@@ -290,14 +446,14 @@ foreach ($guestUser in $guestUsers)
       } else {
           
           Write-Verbose ("$DN was active " + $guestUserSignIns.CreatedDateTime)
-          $MN = $guestUser.Mail
-          $ActiveGuestsTxt = $ActiveGuestsTxt + "`n$DN ($MN) was active " + [DateTime]$guestUserSignIns.CreatedDateTime
+          
+          $ActiveGuestsTxt = $ActiveGuestsTxt + "`n$DN ($M) was active " + [DateTime]$guestUserSignIns.CreatedDateTime
           $ActiveGuest += $guestUser
             
           $theOldGuest += [pscustomobject]@{ 
             ObjectID = $guestUser.ObjectID;
             userprincipalname = $guestUser.userprincipalname;
-            Mail = $guestUser.Mail;
+            Mail = $M;
             CreationType = $guestUser.CreationType;
             UserState = $guestUser.UserState;
             UserStateChangedOn = $guestUser.UserStateChangedOn;
@@ -305,19 +461,20 @@ foreach ($guestUser in $guestUsers)
             Warned = $false;         # If they are active then reset the Warned flag
             DeletedOn = $null;
             MemberOf = $mDisplay;
-             
+            
           }
       
      }
      $i = $i+1
 
-
-
 }
- 
+
+
+
+$ActionTime = ((get-date) -f "{D}")
 # Read thru the events to see who did the operations to create the new guests.
 # TODO this will most likely need some error checking and retry
-$InviterTxt = "" 
+ 
  
 $addedUserEvents = Get-AzureADAuditDirectoryLogs -Filter "ActivityDisplayName eq 'Add user' and ActivityDateTime ge $queryStartDateTimeFilter"
 
@@ -370,6 +527,8 @@ foreach ($addedUserEvent in $addedUserEvents)
     }
 }
 
+} ###################################################
+
     
 write-verbose ("Processing Active Guests : " + $ActiveGuest.count)   
 # $theOldGuest | ConvertTo-Json -Depth 1 | Set-Content -LiteralPath ".\Guest30.txt"
@@ -387,113 +546,181 @@ $GuestAll| Add-Member -MemberType NoteProperty -Name DeletedOn -Value $null -Err
 $GuestAll| Add-Member -MemberType NoteProperty -Name Warned -Value $null -ErrorAction SilentlyContinue
 
 
-write-verbose "Old Guests - which should be removed"
+write-verbose "Guests who did not accept the invitation - which should be removed"
 $theOldGuest = $GuestAll | where { (get-date $($_.LastAccess)) -lt $((get-date).adddays(-$GuestGrace)) -and $(get-date $($_.UserStateChangedOn)) -lt $((get-date).adddays(-$GuestGrace))} 
 
+$PendingAcceptGuests | Format-table -Property ObjectId, UserPrincipalName, mail, UserState, UserStateChangedOn
 
     
 # Just cancel any Invites which have not been 
 Write-Progress -Activity "Removing unaccepted Guests older than $AcceptInvite days" 
 if ($ProductionRun) {
     $PendingAcceptGuests | Remove-AzureADUser
-    }
+    
+}
 
         
 Write-Progress -Activity "Removing aged inactive accounts grace expired" 
         
 $theOldGuest  | where { (get-date $($_.LastAccess)) -lt $((get-date).adddays(-$GuestGrace)) -and (get-date $($_.UserStateChangedOn)) -lt $((get-date).adddays(-$GuestGrace))} | `
     ForEach-Object {
+        $this = $_
 
         if ( $_.DeletedOn -eq $Null) { 
+            
             # TODO This assumes the last Delete took effect
             # Need to add notifcaiton e-mail and the resposible person
-            $memberOf = get-AzureADUser -ObjectID $_.ObjectID | Get-AzureADUserMembership
-            Write-Output ("Email  to " + $_.Mail + ", last access as " + $_.LastAccess + ", StateChange " + $_.UserStateChangedOn + ".  Member:" + $memberOf.DisplayName)
-            if ($ProductionRun) {
-                Remove-AzureADUser -ObjectID $_.ObjectID
+            if ($QuickCheck.IsPresent) {
+                $isOkay = $true
+                } else 
+            {
+            try {
+                $g = get-AzureADUser -ObjectID $_.ObjectID
+                $isOkay = $true
                 }
+            catch { 
+                Write-Verbose ("-+ Account Removed " + $_.ObjectID + " (" + $_.userprincipalname + ")")
+                $this.DeletedOn = $ActionTime
+                $isOkay = $false
+                }
+            }
+            if ($isOkay) {
+                $memberOf = $g | Get-AzureADUserMembership -ErrorAction SilentlyContinue
+                Write-Output ("--" + $_.Mail + ", last access as " + $_.LastAccess + ", StateChange " + $_.UserStateChangedOn + ".  Member:" + ($memberOf.DisplayName -join ",") )
+                if ($ProductionRun) {
+                    try { 
+                        Remove-AzureADUser -ObjectID $_.ObjectID
+                        $this.DeletedOn = $ActionTime
+                        Write-Output ("|REMOVED account " + $_.ObjectID + " (" + $_.userprincipalname + ")")
+                        }
+                    Catch {
+                        Write-Output ("|SHOULD REMOVE account " + $this.ObjectID + " (" + $this.userprincipalname + ")")
+                        }
+                    }
+                    else {
+                        Write-Output (" |SHOULD REMOVE account " + $_.ObjectID + " (" + $_.userprincipalname + ")")
+                    }
                     
-            $_.DeletedOn = ((get-date) -f "{D}")
-            Write-Output ("|REMOVED account " + $_.ObjectID + " (" + $_.userprincipalname + ")")
+            }
+            
             # TODO
             # We should get rid of the record in $GuestAll
+            # BUG BUG BUG without deletng those records, if the same account is added back in, then it would have a Deleted and WARN Record which needs to be cleared
+
 
             }
     }
             
 Write-Progress -Activity "Send a warning message for inactive accounts before grace runs out" 
-$theOldGuest  | where { (get-date $($_.LastAccess)) -lt $((get-date).adddays(-$GuestGrace+$GuestWarning)) -and (get-date $($_.UserStateChangedOn)) -lt $((get-date).adddays(-$GuestGrace+$GuestWarning)) -and $($_DeletedOn) -eq $null } | `
-    ForEach-Object {
-        Write-Verbose "User Warn: " $_.Mail + ", last access as " + $_.LastAccess 
-        if (( $_.Warned -eq $null) -and ($_.Deleted -eq $null)) { 
+$theOldGuest  | where { (get-date $($_.LastAccess)) -lt $((get-date).adddays(-$GuestGrace+$GuestWarning)) -and (get-date $($_.UserStateChangedOn)) -lt $((get-date).adddays(-$GuestGrace+$GuestWarning)) -and $($_.DeletedOn) -eq $null } | `
+ForEach-Object {
+    $this = $_
+     Write-Verbose ("User Warn: " + $_.Mail + ", last access as " + $_.LastAccess)
+     if (( $_.Warned -eq $null) -and ($_.Deleted -eq $null)) {
+         if ((get-date $($_.LastAccess)) -ge $((get-date).adddays(-$GuestGrace))) {
+            Write-Verbose ("User SHOULD have been deleted: " + $_.Mail + ", last access as " + $_.LastAccess)
+         } else {
             # TODO 
             # Need to add notifcaiton e-mail and the resposible person
                     
-                   
-            Write-Output ("Send warning e-mail to " + $_.Mail + ", last access as " + $_.LastAccess + ", StateChange on " + $_.UserStateChangedOn + ") disabling account.  Member:" + ($memberOf.DisplayName -join ", "))
+               $mof = $null
+               if ($QuickCheck.IsPresent) {
+                    $mof =  $this.MemberOf
+                    }
+               else {
+                    $mof =  (Get-AzureADUserMembership -ObjectId $this.ObjectId).DisplayName -join ", "
+                    }       
+            Write-Output ("++Send warning e-mail to " + $_.Mail + ", last access as " + $_.LastAccess + ", StateChange on " + $_.UserStateChangedOn + ") about to expire.  Member:" + $mof)
             $emailBody = $MsgBody
-            $go = (get-azureADUser -objectid $_.objectid)
-            $mof = $null
-            $mof =  (Get-AzureADUserMembership -ObjectId $go.ObjectId).DisplayName -join ", "
-            if ($mof -eq $null -or $mof -eq "") { $mof = "<none>" }
-                Write-Verbose ("Member of : " + $mof + " for " + $go.ObjectId)  
-
-            $replacetable = @{}
-            $replacetable.'%TODAY%' = (get-date -F "D")
-            $replacetable.'%DISPLAYNAME%' = $go.DisplayName
-            $replacetable.'%TENANT%' = $Tent.DisplayName
-            $replacetable.'%GRACEDATE%'=  Get-Date -Date (([datetime]$_.LastAccess).adddays($GuestGrace))  -f "D"
-            $replacetable.'%INACTIVITY%'= "" + (((get-date) - [datetime]$_.LastAccess).Days)
-            $replacetable.'%UPNMAIL%'= $_.Mail
-            $replacetable.'%GROUPNAMES%'= $mof
-            Foreach ($key in $replacetable.Keys) {
-                $emailBody = $emailBody.Replace($key, $replacetable.$key)
+            if ($QuickCheck.IsPresent) {
+                $isOkay = $true
+                } else 
+            {
+            try { 
+                $go = (get-azureADUser -objectid $this.objectid)
+                $isOkay = $true
                 }
-
-            Write-Verbose ("Email Body `n" + $emailBody) 
-
-
-
-            if ($ProductionRun) {
-                Set-AzureADUser -ObjectID $_.ObjectID -AccountEnabled $false
-                        
-                Get-AzureADUser -ObjectID $_.ObjectID | FT -HideTableHeaders DisplayName, Mail, userprincipalname, AccountEnabled
+            catch { 
+                Write-Verbose ("-+ Account Removed " + $this.ObjectID + " (" + $this.userprincipalname + ")")
+                $this.DeletedOn = $ActionTime
+                $isOkay = $false
                 }
-            $_.Warned =  (get-date) -f "{D}"
-            Write-Output ("|WARNED account " + $_.ObjectID + " (" + $_.userprincipalname + ")")
-    
             }
+            if ($isOkay) {
+                $mof = $null
+                if ($QuickCheck.IsPresent) {
+                    $mof =  $this.MemberOf
+                    }
+                else {
+                    $mof =  (Get-AzureADUserMembership -ObjectId $go.ObjectId).DisplayName -join ", "
+                    }
+                if ($mof -eq $null -or $mof -eq "") { $mof = "<none>" }
+                    Write-Verbose ("Member of : " + $mof + " for " + $go.ObjectId)  
+
+                $replacetable = @{}
+                $replacetable.'%TODAY%' = (get-date -F "D")
+                $replacetable.'%DISPLAYNAME%' = $go.DisplayName
+                $replacetable.'%TENANT%' = $Tent.DisplayName
+                $replacetable.'%GRACEDATE%'=  Get-Date -Date (([datetime]$_.LastAccess).adddays($GuestGrace))  -f "D"
+                $replacetable.'%INACTIVITY%'= "" + (((get-date) - [datetime]$_.LastAccess).Days)
+                $replacetable.'%UPNMAIL%'= $_.Mail
+                $replacetable.'%GROUPNAMES%'= $mof
+                Foreach ($key in $replacetable.Keys) {
+                    $emailBody = $emailBody.Replace($key, $replacetable.$key)
+                    }
+
+                Write-Verbose ("Email Body `n" + $emailBody) 
+
+                # TODO WARN E-MAIL logic goes here
+                $warnedCnt++
+                if ($ProductionRun) {
+                    if ($SendMail) { 
+                        
+                    $_.Warned =  $ActionTime
+                    Write-Output (" |WARNED account " + $_.ObjectID + " (" + $_.userprincipalname + ")")
+                 } else {
+                    Write-Output (" |Should WARN account " + $_.ObjectID + " (" + $_.userprincipalname + ")")
+                    }
+                 }
+  }  
+            }
+        }
     }
     
 
    
+if (-not $QuickCheck.IsPresent) {
+    write-host ("Saving State for Next Run " + $GuestStateHistory) -ForegroundColor Green
 
-write-host ("Saving State for Next Run " + $GuestStateHistory) -ForegroundColor Green
+    #  -Compress 
+    if (Test-Path -LiteralPath $GuestStateHistory) {
+        copy-item $GuestStateHistory $GuestStateHistory+".sav" -Force
+        }
+    $GuestAll | ConvertTo-Json -Depth 2 | Set-Content -LiteralPath $GuestStateHistory
+    
 
-#  -Compress 
-if (Test-Path -LiteralPath $GuestStateHistory) {
-    copy-item $GuestStateHistory $GuestStateHistory+".sav" -Force
+    #set the time back to when we started this.
+
+    $setFile = Get-item -Path $GuestStateHistory
+    $setFile.CreationTime = $setFile.LastWriteTime = $setFile.LastAccessTime= $StartingTime
     }
- $GuestAll | ConvertTo-Json -Depth 2 | Set-Content -LiteralPath $GuestStateHistory
-
-#set the time back to when we started this.
-
-$setFile = Get-item -Path $GuestStateHistory
-$setFile.CreationTime = $setFile.LastWriteTime = $setFile.LastAccessTime= $StartingTime
 
 
 $oldCnt = $theOldGuest.count
 $warnCnt = ($GuestAll | where { $_.Warned -eq $true -and $_.DeletedOn -eq $null } ).ObjectID.count
 $delCnt = ($GuestAll | where { $_.DeletedOn -ne $null } ).ObjectID.count
-$act30 = ($GuestAll  | where { (get-date $($_.LastAccess)) -gt $((get-date).adddays(-28))}).ObjectID.count    # 4 weeks rolling window
+$act30 = ($GuestAll  | where { (get-date $($_.LastAccess)) -gt $((get-date).adddays(-28))})    # 4 weeks rolling window
+$act7 = ($GuestAll  | where { (get-date $($_.LastAccess)) -gt $((get-date).adddays(-7))})    # 4 weeks rolling window
 
 Write-Host "`nSummary`n---------------------------------------" -ForegroundColor Yellow
 
 $results =  (  "Guests active since last run     : " + $ActiveGuest.count)
-$results += ("`nGuests active in last 28 days    : " + $Act30)
+$results += ("`nGuests active in last  7 days    : " + $Act7.ObjectID.count)
+$results += ("`nGuests active in last 28 days    : " + $Act30.ObjectID.count)
 $results += ("`nPending older than $AcceptInvite days       : " + $PendingAcceptGuests.count)
 $results += ("`nGuest who are older than "  + $GuestGrace +" days : " + $oldCnt)
 $results += ("`nGuest who are warned             : " + $warnCnt)
+$results += ("`nGuest who are should be warned   : " + ($warnedCnt - $warnCnt))
 $results += ("`nGuest historically deleted       : " + $delCnt)
 $results += ("`nTotal Guests                     : " + $guestUsers.count)
 
@@ -510,9 +737,37 @@ $PendingAcceptGuests | Sort-Object -Property UserStateChangedOn   | Format-Table
 $theOldGuest | Sort-Object -Property UserStateChangedOn   | Format-Table -Property Mail,CreationType,UserState,UserStateChangedOn,LastAccess,Warned,DeletedOn   |  Out-File -file $GuestHistoryLog -Append
 
 "`nActive Guests are:`n" + $ActiveGuestsTxt  |  Out-File -file $GuestHistoryLog -Append
+
+$a = $Act30 | where { (get-date $($_.LastAccess)) -gt $((get-date).adddays(-7))} | Select Mail, LastAccess
+"`nActive Guests 0 to 7:`n" |  Out-File -file $GuestHistoryLog -Append
+ $a |  Out-File -file $GuestHistoryLog -Append
+$a = $Act30 | where { (get-date $($_.LastAccess)) -le $((get-date).adddays(-7))} | Select Mail, LastAccess
+"`nActive Guests 7 to 30:`n" |  Out-File -file $GuestHistoryLog -Append
+$a |  Out-File -file $GuestHistoryLog -Append
 if ($InviterTxt -ne "") { 
     "`nInvited Guests:`n" + $InviterTxt   |  Out-File -file $GuestHistoryLog -Append
     }
+
+$a = ""
+$groupsCnt = @{}
+
+for ($i = 0; $i -lt $guestStateAll.Length; $i++) {
+    if ($guestStateAll[$i].Memberof -ne $null) {
+        if ($guestStateAll[$i].Memberof.getType().BaseType.Name -eq "Array") { 
+            For ($m=0; $m -lt $guestStateAll[$i].MemberOf.count; $m++) { 
+                $groupsCnt[$guestStateAll[$i].MemberOf[$m]]++; 
+                }
+         } else {
+            $groupsCnt[$guestStateAll[$i].MemberOf]++; 
+         }
+        
+        }
+    }
+foreach ($g in  $groupsCnt.Keys) {
+    $a += ( " $($groupsCnt.Item($g)) : $g`n") 
+    }    
+
+"`Summary of Guests in Groups :`n$a" |  Out-File -file $GuestHistoryLog -Append
 
 "`n######## End ########" | Out-File -file $GuestHistoryLog -Append
 
