@@ -1,4 +1,4 @@
-﻿    # Test for URL Issues
+    # Test for URL Issues
     #
     #
     
@@ -13,21 +13,24 @@ $issueURL = @(
     "https://aka.ms/mfasetup",
     "https://az416426.vo.msecnd.net/scripts/a/ai.0.js",
     "https://az495088.vo.msecnd.net/app-logo/customappsso_215.png",
-    "https://az495088.vo.msecnd.net/app-logo/customappsso_215.png",
     "https://strep-prod-streaming-amsprodquickhelpcus-usct.streaming.media.azure.net/29aaae13-f622-4e32-bef8-ec67579c653a/TEAMS_Where_Are_Shared_Files_Sav.ism/manifest(format=mpd-time-csf)",
-    "https://www.youtube.com/iframe_api") 
+    "https://www.youtube.com/iframe_api",
+    "https://hothardware.com/news/win11-update-broke-the-start-menu",
+    "https://www.google.com",
+    "https://www.office.com") 
+
 
 
 
     $client = new-object System.Net.WebClient 
 
     
-
+    $successcnt= 0
     
     $issueURL | ForEach-Object {
         $sourceuri = $_
         $startnumber = $startnumber + 1
-        $lname = $prefix + $startnumber + ".tmp"
+        $lname = $prefix + $startnumber.ToString("D2") + ".tmp"
              
         $filename = $localpath + "\" + $lname
         
@@ -37,18 +40,30 @@ $issueURL = @(
         
         try
         {
-            $client.DownloadFile($sourceuri, $filename)
+            $client.DownloadFile($sourceuri, $filename) 
             write-host "Downloaded $sourceuri" -ForegroundColor Green
-            
+            $successcnt = $successcnt+1         
         }
         catch
         {
-            write-host "Failed $sourceuri" -ForegroundColor Yellow
+            write-host "--- Failed $sourceuri" -ForegroundColor Yellow
         }
         
        } 
        
-       get-item -Path ($localpath + "\$prefix*.tmp") 
- #      remove-item -Path  ($localpath + "\$prefix*.tmp") 
+       # get-item -Path ($localpath + "\$prefix*.tmp") 
+       remove-item -Path  ($localpath + "\$prefix*.tmp") 
 
-          write-host "========= Complete"
+       $issuecnt = $issueURL.Count
+       $res = ($successcnt / $issuecnt) 
+       
+       $res = $res.ToString("P") 
+       if ($successcnt -eq $items) {
+            $res = $res + " PERFECT"
+       } else   {
+            $res = $res + " Something is NOT RIGHT"
+       }
+
+       
+        write-host "`n========= Complete : Successful $successcnt vs $issuecnt tries = $res" -ForegroundColor Cyan
+        
