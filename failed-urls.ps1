@@ -58,7 +58,7 @@ $issueURL = @(
        $res = ($successcnt / $issuecnt) 
        
        $res = $res.ToString("P") 
-       if ($successcnt -eq $items) {
+       if ($successcnt -eq $issuecnt) {
             $res = $res + " PERFECT"
        } else   {
             $res = $res + " Something is NOT RIGHT"
