@@ -1,3 +1,4 @@
+
 #Requires -Modules AzureADPreview
 # , Exch-Rest
 #
@@ -34,8 +35,8 @@ param
 #.......    Grace - Warning      (E-mail warning)
 #..........................Grace (Delete account)
 
-$Version = "2021.7.12"
-$GuestGrace = 180     #days 
+$Version = "2023.6.19"
+$GuestGrace = 390     #days 
 $GuestWarning = 14   #days 
 $AcceptInvite = 30          #days    #  (Max limit of design is 30 days)
 $GuestInformGroupOwner = $false      # NOT BUILT
@@ -222,7 +223,7 @@ if ($hasAD) {
   
 # Use the Tenant ID to avoid issues with multi-tenant testing
 $Tent = (Get-AzureADTenantDetail)
-$GuestStateHistoryPath = $env:APPDATA  + "\GuestState"
+$GuestStateHistoryPath = $env:OneDriveCommercial  + "\Documents\Security\GuestState"
 $GuestStateHistory = $GuestStateHistoryPath + "\GuestStateHistory." + $Tent.ObjectID + ".state"
 
 Write-Verbose ("Working on Tenant " + $Tent.DisplayName + " " + $Tent.ObjectID)
@@ -294,13 +295,14 @@ if ($ProductionRun) {
 # check date of state file to make sure it is not more than x days ago
 
 Write-Host "# Reviewing Guests for : " $Tent.DisplayName  " using " $Version
-Write-Host "============================================"
+
+Write-Host ("="*(35+$Tent.DisplayName.Length + $version.Length))
 
 if ($QuickCheck.ispresent) {
     Write-host ("   Quick Check Only" )  -ForegroundColor Green
     }
 
-Write-host $lastRunTxt
+Write-host $lastRunTxt -ForegroundColor darkyellow
 Write-verbose ("GuestInvite = $GuestInvite  (Non accept Invite = delete) for " + (get-date).adddays(-$AcceptInvite))
 Write-verbose ("GuestWarninge = $GuestWarning  (Grace-Warning = email) for " + (get-date).adddays(-$GuestGrace+$GuestWarning))
 Write-verbose ("GuestGrace    = $GuestGrace = (Delete) for " + (get-date).adddays(-$GuestGrace) )
@@ -312,6 +314,7 @@ $queryStartDateTimeFilter = '{0:yyyy-MM-dd}T{0:HH:mm:sszzz}' -f $lastRun.AddHour
 
 $InviterTxt = ""
 $warnedCnt = 0
+$shouldwarnedCnt = 0
 
 
  # Check to see if they fail to run AD Audit
@@ -333,16 +336,17 @@ if (-not $QuickCheck.ispresent) {
             }
         }
     }
+
 Write-Progress -Activity "Getting Old Expire Invite Guest" 
  #Delete guest that are pending acceptance and disabled for longer than $AcceptInvite days
   write-verbose "Getting accounts to Delete because they have not accepted their invite in $AcceptInvite days" 
-  $PendingAcceptGuests = Get-AzureADUser -Filter "userType eq 'Guest'" -all $true -PipelineVariable guest | `
-  where {($_.userstate -eq 'PendingAcceptance') -and ([datetime](get-date $($_.UserStateChangedOn)) -lt $((get-date).adddays(-$AcceptInvite)))} 
+$PendingAcceptGuests = Get-AzureADUser -Filter "userType eq 'Guest'" -all $true -PipelineVariable guest | `
+    where {($_.userstate -eq 'PendingAcceptance') -and ([datetime](get-date $($_.UserStateChangedOn)) -lt $((get-date).adddays(-$AcceptInvite)))} 
    
 
 
-
-  $guestUsers = Get-AzureADUser -Filter "userType eq 'Guest'"  -all $true
+ #   userType eq 'Member'
+$guestUsers = Get-AzureADUser -Filter "userType eq 'Guest'"  -all $true
   #### -top 10
   
  
@@ -355,58 +359,142 @@ $guestState30 = [pscustomobject]@()
 write-verbose "Getting Active Guests "
 Write-Progress -Activity "Getting accounts" 
 
-if (-not $QuickCheck.ispresent) {   ###########################
+#if (-not $QuickCheck.ispresent) {   ###########################
 
 
 Write-Verbose "Reading Guest's logins"
+$timer = [System.Diagnostics.Stopwatch]::StartNew()
 
-$ActiveGuestsTxt = ""
-    
+$lastLoginDates = @{}
+
+$day = (get-date).Date
 $i = 0
-$ActiveGuest = @()
-$theOldGuest = [pscustomobject]@()
-#For each Guest user, validate there is a login in the last week
-foreach ($guestUser in $guestUsers)
-{
-    $DN = $guestUser.DisplayName
-    $ag = $ActiveGuest.count
-    
-    if ($guestUser.Mail -eq $Null) {
-        $M = $guestUser.Mail
-        } else {
-        $M = $guestUser.OtherMails 
-        } 
-    Write-Progress "Reading logs for Guest: $DN  ($i of $TG)" -PercentComplete ($i / $guestUsers.count*100) -Status "Active Guests: $ag"
-    Write-Verbose ("Reading: $DN (" +   $M + ")")
-    # This can trigger errors "Message: This request is throttled."
-    # TODO need to better detect and fix
-    # get the Guest users most recent signins
+$days = ($day - $lastrun).days
+while ($day -gt $lastrun) {
+    $elapsedSecondsTop = $timer.Elapsed.TotalMilliseconds 
+    # Convert the day to the required format for filtering
+    $filterDate = 
+    $filterDate  = '{0:yyyy-MM-dd}T{0:HH:mm:sszzz}' -f $day
 
+    $eodfilterDate = '{0:yyyy-MM-dd}T{0:HH:mm:sszzz}' -f $day.AddDays(1).AddMilliseconds(-1)
     $Looking = $true
     $DelayIt = 1
+    $theday = $day.tostring("dd/MMM/yyyy")
+    if ($remainingTime -le 60) {
+        $rtime = "$remainingTime seconds"
+    } else {
+        $rtime = ($remainingTime/60).ToString('.0') + " minutes"
+        }
+     = 
+    
+    Write-Progress ("Reading logs for $theday [$rtime]") -PercentComplete (100 * $i / $days)
     while ($Looking) {
-        try {
-                   # ....... this is the MONEY QUERY ..............
-
-            $guestUserSignIns = Get-AzureADAuditSignInLogs -Top 1 -Filter "createdDateTime ge $queryStartDateTimeFilter and UserID eq '$($guestUser.ObjectID)'" -ErrorAction SilentlyContinue
-            $Looking = $false
+   
+        try{
+            # Query the Azure AD audit sign-in logs for guest sign-ins on the specific day
+            # "createdDateTime ge $filterDate and createdDateTime lt $eodfilterDate and userType eq 'Guest' "
+            $guestSignIns = Get-AzureADAuditSignInLogs -Filter "createdDateTime ge $filterDate and createdDateTime lt $eodfilterDate and userType eq 'Guest'" -Top 5000
+            $Looking = $False
             }
         Catch {
-            Write-Progress ("Stalled - Reading logs for Guest $DN (" + $DelayIt + ")") -PercentComplete ($i / $guestUsers.count*100)
+            #Write-Output "An error occurred:"
+            # Write-Output $_
+            Write-Progress ("Stalled - Reading logs for date $theday (retry $DelayIt)") -PercentComplete (100 * $i / $days)
             Write-Verbose "Stalled reading AzureADAuditSignInLogs"
 
             if ($DelayIt -gt 10) { 
                 $Looking = $False
-                Write-Host ("Problem getting AuditSignInLogs for : " + $guestUsers.DisplayName + "(" +$guestUsers.Mail +")") -ForegroundColor DarkRed -BackgroundColor Yellow
+                Write-Host ("Problem getting AuditSignInLogs for : $theday ") -ForegroundColor DarkRed -BackgroundColor Yellow
             } else {
-    
                 # we will see if this slows the script enough that MS let's it continue
-                Start-Sleep (40 * $DelayIt)
-                $DelayIt += 1
+                Start-Sleep (15 * $DelayIt)
+                $DelayIt = 1 + $DelayIt
+                }
             }
         }
-    }
+        # Loop through each guest sign-in
+    $baseper = 100 * $i / $days
+    $gsc = $guestSignIns.Count / $days * 100
+    $k = 0
+    foreach ($guestSignIn in $guestSignIns) {
+        $userPrincipalName = $guestSignIn.UserPrincipalName
+        Write-Progress ("Reading logs for user $userPrincipalName (retry $DelayIt)") -PercentComplete ($baseper + $k/$gsc)
+        # Check if the user's last login date has already been recorded
+        if ($lastLoginDates.ContainsKey($userPrincipalName)) {
+                
+        }
+        else {
+            $Looking = $true
+            $DelayIt = 1
+            # Retrieve the last sign-in time for the user and store it in the hashtable
+            while ($Looking) {
+                try{
+        
+                    $lastLogin = Get-AzureADAuditSignInLogs -Filter "UserPrincipalName eq '$userPrincipalName'" -Top 1 
+                    $Looking = $False
+                    Write-Progress ("Reading logs for user $userPrincipalName (retry $DelayIt)") -PercentComplete ($baseper + $k/$gsc)
+                    }
+                Catch {
+                    Write-Progress ("Stalled - Reading logs for user $userPrincipalName (retry $DelayIt)") -PercentComplete ($baseper + $k/$gsc)
+                    Write-Verbose "Stalled reading AzureADAuditSignInLogs"
+                    if ($DelayIt -gt 10) { 
+                        $Looking = $False
+                        Write-Host ("Problem getting AuditSignInLogs for : $theday ") -ForegroundColor DarkRed -BackgroundColor Yellow
+                    } else {
+                        # we will see if this slows the script enough that MS let's it continue
+                        Start-Sleep (15 * $DelayIt)
+                        $DelayIt = 1 + $DelayIt
+                    }
+                }
+            }
+
+            $lastLoginDates[$userPrincipalName] = $lastLogin.CreatedDateTime
+            Write-Verbose ("$DN was active " + $lastLogin.CreatedDateTime)
+        }
+        $k = $k+1
+    } # foreach
+    # Move to the previous day
+    $day = $day.AddDays(-1)
+    
+    $i = $i+1
+    
+    $remainingTime = [Math]::Floor($timer.Elapsed.TotalMilliseconds  / ($days - $i) / $days / 1000)
+}
+
+
+
+$i = 0
+$ActiveGuestsTxt = ""
+$ActiveGuest = @()
+$theOldGuest = [pscustomobject]@()
+#For each Guest user, validate there is a login in the last week
+
+
+$timer = [System.Diagnostics.Stopwatch]::StartNew()
+foreach ($guestUser in $guestUsers)
+{
+    $elapsedSecondsTop = $timer.Elapsed.TotalMilliseconds 
+    $DN = $guestUser.DisplayName
+    $userPrincipalName = $guestUser.userPrincipalName
+    $ag = $ActiveGuest.count
+    
+    if ($guestUser.Mail -ne $Null) {
+        $M = $guestUser.Mail
+        } else {
+        $M = $guestUser.OtherMails 
+        } 
+    $t = [Math]::Floor($elapsedSecondsTop/1000)
+    $gc = $guestUsers.count
+    Write-Progress "Reading logs for Guest: $DN  ($i of $TG) [Time: $elapsedSecondsMember s ~ $remainingTimeseconds s @ $t s ] " -PercentComplete ($i / ($guestUsers.count) * 100) -Status "Active Guests: $ag"
+    Write-Verbose ("Reading: $DN (" +   $M + ")")
+
     # TODO Error checking for no membership
+    
+    if ($lastLoginDates.ContainsKey($userPrincipalName)) {
+        $guestUserSignIns = $lastLoginDates[$userPrincipalName]
+    } else {
+        $guestUserSignIns = $null
+        }
     
     if ($guestUserSignIns -eq $null) {
         $memberOf = $guestUser | Get-AzureADUserMembership
@@ -418,14 +506,18 @@ foreach ($guestUser in $guestUsers)
         #
     
         if ($guestStateAll -ne $null -and ! $guestStateAll.ObjectID.Contains($guestUser.ObjectID)) {
+           if ($null -ne $oldMissingGuest.Warned) {
+                  $Warned = $oldMissingGuest.Warned
+           } else { 
+                  $Warned = $false
+           }
            if (($oldMissingGuest.UserStateChangedOn) -eq $null) {
                $oldMissingGuest.UserStateChangedOn = $queryStartDateTimeFilter
                $oldMissingGuest.UserState = $oldMissingGuest.UserState + "/ForcedChangedOn"
-               $oldMissingGuest.Warned = $false
-
+               $Warned = $false
                }
            $oldMissingGuest.UserState = $oldMissingGuest.UserState + "/ForcedLastAccess"
-       
+           
                 
            $theOldGuest += [pscustomobject]@{
                 ObjectID = $guestUser.ObjectID;
@@ -435,19 +527,19 @@ foreach ($guestUser in $guestUsers)
                 UserState = $oldMissingGuest.UserState;
                 UserStateChangedOn = $oldMissingGuest.UserStateChangedOn;
                 LastAccess = $queryStartDateTimeFilter;
-                Warned = $oldMissingGuest.Warned;
+                Warned = $Warned;
                 DeletedOn = $null;
                 MemberOf = $mDisplay;
                 
                 }
-
+        
        
           }
       } else {
           
-          Write-Verbose ("$DN was active " + $guestUserSignIns.CreatedDateTime)
+          Write-Verbose ("$DN was active " + $guestUserSignIns)
           
-          $ActiveGuestsTxt = $ActiveGuestsTxt + "`n$DN ($M) was active " + [DateTime]$guestUserSignIns.CreatedDateTime
+          $ActiveGuestsTxt = $ActiveGuestsTxt + "`n$DN ($M) was active " + [DateTime]$guestUserSignIns
           $ActiveGuest += $guestUser
             
           $theOldGuest += [pscustomobject]@{ 
@@ -457,17 +549,23 @@ foreach ($guestUser in $guestUsers)
             CreationType = $guestUser.CreationType;
             UserState = $guestUser.UserState;
             UserStateChangedOn = $guestUser.UserStateChangedOn;
-            LastAccess = $guestUserSignIns.CreatedDateTime;
+            LastAccess = $guestUserSignIns;
             Warned = $false;         # If they are active then reset the Warned flag
             DeletedOn = $null;
             MemberOf = $mDisplay;
             
           }
-      
-     }
+      }
+    
+    
+
+     
      $i = $i+1
 
+     $remainingTimeseconds = [Math]::Floor($timer.Elapsed.TotalMilliseconds / $i * $TG / 1000)
 }
+
+$timer.Stop()
 
 
 
@@ -488,9 +586,8 @@ foreach ($addedUserEvent in $addedUserEvents)
         #Get the inviter reference from the InitiatedBy field
         $inviterId = $addedUserEvent.InitiatedBy.User.Id
         $inviteUser = get-AzureADUser -ObjectID  $inviterId
-                $inviteDisplay = $inviteUser.DisplayName
-        
-
+        $inviteDisplay = $inviteUser.DisplayName
+  
     } else {
         if ($addedUserEvent.InitiatedBy.App -ne $null) {
             $inviterId = $addedUserEvent.InitiatedBy.App.ServicePrincipalId
@@ -501,7 +598,6 @@ foreach ($addedUserEvent in $addedUserEvents)
             $inviteDisplay = "-None-"
             }
     }
-
      
     #For each TargetResources, check to see if it's a guest user, and if so, add its Manager
     foreach ($targetResource in $addedUserEvent.TargetResources)
@@ -512,14 +608,12 @@ foreach ($addedUserEvent in $addedUserEvents)
         
         if ($targetResource.GroupType -eq "User") {
         
-            if ($addedUser.UserType -eq "Guest")
-            {
-             $memberOf = $addedUser | Get-AzureADUserMembership
-             $mDisplay = $memberOf.DisplayName
-             Write-Output ("Guest " + $addedUser.DisplayName + " invited by " + $inviteDisplay)
-             $InviterTxt += "Guest: " + $addedUser.DisplayName + " ("+ $addedUser.Mail + ")  invited by " + $inviteDisplay + " On " + $addedUserEvent.ActivityDateTime + ".  Member:" + $memberOf.DisplayName + "`n"
-            
-            }
+            if ($addedUser.UserType -eq "Guest") {
+                $memberOf = $addedUser | Get-AzureADUserMembership
+                $mDisplay = $memberOf.DisplayName
+                Write-Output ("Guest " + $addedUser.DisplayName + " invited by " + $inviteDisplay)
+                $InviterTxt += "Guest: " + $addedUser.DisplayName + " ("+ $addedUser.Mail + ")  invited by " + $inviteDisplay + " On " + $addedUserEvent.ActivityDateTime + ".  Member:" + $memberOf.DisplayName + "`n"
+                }
         } else {
             # This is most likely a 
             Write-Verbose ("Other Resource added: " + $addedUser.DisplayName + " " + $targetResource.Id)
@@ -527,7 +621,7 @@ foreach ($addedUserEvent in $addedUserEvents)
     }
 }
 
-} ###################################################
+# } ###################################################
 
     
 write-verbose ("Processing Active Guests : " + $ActiveGuest.count)   
@@ -578,14 +672,19 @@ $theOldGuest  | where { (get-date $($_.LastAccess)) -lt $((get-date).adddays(-$G
                 $g = get-AzureADUser -ObjectID $_.ObjectID
                 $isOkay = $true
                 }
-            catch { 
+            catch {
+                $g = $null 
                 Write-Verbose ("-+ Account Removed " + $_.ObjectID + " (" + $_.userprincipalname + ")")
                 $this.DeletedOn = $ActionTime
                 $isOkay = $false
                 }
             }
             if ($isOkay) {
-                $memberOf = $g | Get-AzureADUserMembership -ErrorAction SilentlyContinue
+                if ($g -eq $null) {
+                    $memberOf = ($g | Get-AzureADUserMembership -ErrorAction SilentlyContinue)
+                } else {
+                    $memberof = @()
+                    }
                 Write-Output ("--" + $_.Mail + ", last access as " + $_.LastAccess + ", StateChange " + $_.UserStateChangedOn + ".  Member:" + ($memberOf.DisplayName -join ",") )
                 if ($ProductionRun) {
                     try { 
@@ -616,6 +715,7 @@ $theOldGuest  | where { (get-date $($_.LastAccess)) -lt $((get-date).adddays(-$G
 ForEach-Object {
     $this = $_
      Write-Verbose ("User Warn: " + $_.Mail + ", last access as " + $_.LastAccess)
+     $shouldwarnedCnt++
      if (( $_.Warned -eq $null) -and ($_.Deleted -eq $null)) {
          if ((get-date $($_.LastAccess)) -ge $((get-date).adddays(-$GuestGrace))) {
             Write-Verbose ("User SHOULD have been deleted: " + $_.Mail + ", last access as " + $_.LastAccess)
@@ -690,19 +790,22 @@ ForEach-Object {
 
    
 if (-not $QuickCheck.IsPresent) {
-    write-host ("Saving State for Next Run " + $GuestStateHistory) -ForegroundColor Green
+    if ($GuestAll.count -eq 0) {
+        Write-Host "`nAwareness - you have no guest, therefor a state file was not created`n" -ForegroundColor Yellow
 
-    #  -Compress 
-    if (Test-Path -LiteralPath $GuestStateHistory) {
-        copy-item $GuestStateHistory $GuestStateHistory+".sav" -Force
+    } else {
+        write-host ("Saving State for Next Run " + $GuestStateHistory) -ForegroundColor Green
+
+        #  -Compress 
+        if (Test-Path -LiteralPath $GuestStateHistory) {
+            copy-item $GuestStateHistory $GuestStateHistory+".sav" -Force
+            }
+        $GuestAll | ConvertTo-Json -Depth 2 | Set-Content -LiteralPath $GuestStateHistory
+
+        #set the time back to when we started this.
+        $setFile = Get-item -Path $GuestStateHistory
+        $setFile.CreationTime = $setFile.LastWriteTime = $setFile.LastAccessTime= $StartingTime
         }
-    $GuestAll | ConvertTo-Json -Depth 2 | Set-Content -LiteralPath $GuestStateHistory
-    
-
-    #set the time back to when we started this.
-
-    $setFile = Get-item -Path $GuestStateHistory
-    $setFile.CreationTime = $setFile.LastWriteTime = $setFile.LastAccessTime= $StartingTime
     }
 
 
@@ -712,7 +815,7 @@ $delCnt = ($GuestAll | where { $_.DeletedOn -ne $null } ).ObjectID.count
 $act30 = ($GuestAll  | where { (get-date $($_.LastAccess)) -gt $((get-date).adddays(-28))})    # 4 weeks rolling window
 $act7 = ($GuestAll  | where { (get-date $($_.LastAccess)) -gt $((get-date).adddays(-7))})    # 4 weeks rolling window
 
-Write-Host "`nSummary`n---------------------------------------" -ForegroundColor Yellow
+Write-Host "`nSummary`n--------------------------------------- `nVersion: $Version, Grace: $GuestGrace, Warning: $GuestWarning, Invite: $AcceptInvite" -ForegroundColor Yellow
 
 $results =  (  "Guests active since last run     : " + $ActiveGuest.count)
 $results += ("`nGuests active in last  7 days    : " + $Act7.ObjectID.count)
@@ -720,7 +823,7 @@ $results += ("`nGuests active in last 28 days    : " + $Act30.ObjectID.count)
 $results += ("`nPending older than $AcceptInvite days       : " + $PendingAcceptGuests.count)
 $results += ("`nGuest who are older than "  + $GuestGrace +" days : " + $oldCnt)
 $results += ("`nGuest who are warned             : " + $warnCnt)
-$results += ("`nGuest who are should be warned   : " + ($warnedCnt - $warnCnt))
+$results += ("`nGuest who are should be warned   : " + ($shouldwarnedCnt))
 $results += ("`nGuest historically deleted       : " + $delCnt)
 $results += ("`nTotal Guests                     : " + $guestUsers.count)
 
