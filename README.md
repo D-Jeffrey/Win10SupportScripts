@@ -1,5 +1,8 @@
+
 # Win10 and Office 365 Support Scripts
 Misc Scripts use on Windows 10 computers and others for Office 365 to do some PC Pro support tasks.
+
+## NOTE A LOT of these are using PRE-Graph API, so may or may not work any more.
 
 ## CheckUser365.ps1
  
